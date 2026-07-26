@@ -215,7 +215,9 @@ bunny_cdn_hostname    = "${BUNNY_CDN_HOSTNAME}"
 TFVARS
 
 # Cloud Shell stub bəzən exit 0 qaytarır — real binary yoxla
-if ! terraform version 2>/dev/null | head -1 | grep -q '^Terraform v'; then
+# (pipefail + head SIGPIPE verməsin deyə terraform_real istifadə olunur)
+export PATH="${HOME}/bin:${PATH}"
+if ! terraform_real; then
   die "Real Terraform yoxdur. Yenidən: git pull && ./deploy.sh (və ya: export PATH=\$HOME/bin:\$PATH)"
 fi
 

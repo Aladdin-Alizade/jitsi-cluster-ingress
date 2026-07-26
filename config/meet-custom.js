@@ -21,6 +21,16 @@ config.enableSimulcast = true;
 config.disableSimulcast = false;
 config.enableLayerSuspension = true;
 
+// AV1 → JVB Av1DDQualityFilter crash (IndexOutOfBounds) — video düşür, iştirakçılar
+// bir-birini görmür. VP8/VP9 ilə sabit qalır.
+config.videoQuality = {
+    codecPreferenceOrder: [ 'VP8', 'VP9', 'H264' ],
+    mobileCodecPreferenceOrder: [ 'VP8', 'H264', 'VP9' ],
+    screenshareCodec: 'VP8',
+    mobileScreenshareCodec: 'VP8'
+};
+config.disabledCodecs = [ 'AV1' ];
+
 config.desktopSharingFrameRate = { min: 5, max: 30 };
 
 // 3+ nəfər üçün server üzərindən (live ilə eyni)

@@ -206,7 +206,9 @@ ensure_deploy_prerequisites() {
   fi
 
   persist_cloudshell_prereqs
-  _log "Asılılıqlar hazırdır: terraform=$(terraform version | head -1) jq=$(jq --version)"
+  local tf_ver
+  tf_ver="$(terraform version 2>/dev/null | head -1 || true)"
+  _log "Asılılıqlar hazırdır: terraform=${tf_ver} jq=$(jq --version)"
 }
 
 # Birbaşa çağırılsa

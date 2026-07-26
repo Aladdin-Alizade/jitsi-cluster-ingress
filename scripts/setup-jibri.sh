@@ -89,15 +89,30 @@ BUNNY_API_KEY=${BUNNY_API_KEY}
 BUNNY_CDN_HOSTNAME=${BUNNY_CDN_HOSTNAME}
 PORTAL_UPLOAD_META_URL=${PORTAL_UPLOAD_META_URL:-}
 PORTAL_UPLOAD_META_TOKEN=${PORTAL_UPLOAD_META_TOKEN:-}
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+TELEGRAM_TOPIC_ID=${TELEGRAM_TOPIC_ID:-}
+TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY:-true}
 ENV
 chmod 600 /opt/jitsi-jibri/bunny.env
 chown jibri:jibri /opt/jitsi-jibri/bunny.env
 log "Bunny env yazıldı (library=${BUNNY_LIBRARY_ID}${PORTAL_UPLOAD_META_URL:+, portal meta=on})"
 
+cat > /opt/jitsi-jibri/telegram.env <<TGENV
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+TELEGRAM_TOPIC_ID=${TELEGRAM_TOPIC_ID:-}
+TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY:-true}
+TGENV
+chmod 600 /opt/jitsi-jibri/telegram.env
+chown jibri:jibri /opt/jitsi-jibri/telegram.env
+
 cp "${SCRIPT_DIR}/bunny-upload.sh" /opt/jitsi-jibri/bunny-upload.sh
 cp "${SCRIPT_DIR}/finalize_recording.sh" /opt/jitsi-jibri/finalize_recording.sh
+[[ -f "${SCRIPT_DIR}/telegram-notify.sh" ]] && cp "${SCRIPT_DIR}/telegram-notify.sh" /opt/jitsi-jibri/telegram-notify.sh
 chmod 755 /opt/jitsi-jibri/bunny-upload.sh /opt/jitsi-jibri/finalize_recording.sh
-chown jibri:jibri /opt/jitsi-jibri/*.sh
+[[ -f /opt/jitsi-jibri/telegram-notify.sh ]] && chmod 755 /opt/jitsi-jibri/telegram-notify.sh
+chown jibri:jibri /opt/jitsi-jibri/*.sh /opt/jitsi-jibri/*.env 2>/dev/null || chown jibri:jibri /opt/jitsi-jibri/*.sh
 
 # launch.sh path — Debian/Ubuntu paketində fərqli ola bilər
 LAUNCH=""

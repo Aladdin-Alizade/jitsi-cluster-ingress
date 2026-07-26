@@ -98,16 +98,25 @@ JUMP_OPTS=(
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 TMP_ENV="${TMP_DIR}/bunny.env.new"
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
+TELEGRAM_TOPIC_ID="${TELEGRAM_TOPIC_ID:-}"
+TELEGRAM_NOTIFY="${TELEGRAM_NOTIFY:-true}"
 cat > "${TMP_ENV}" <<EOF
 BUNNY_LIBRARY_ID=${BUNNY_LIBRARY_ID}
 BUNNY_API_KEY=${BUNNY_API_KEY}
 BUNNY_CDN_HOSTNAME=${BUNNY_CDN_HOSTNAME}
 PORTAL_UPLOAD_META_URL=${PORTAL_UPLOAD_META_URL}
 PORTAL_UPLOAD_META_TOKEN=${PORTAL_UPLOAD_META_TOKEN}
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+TELEGRAM_TOPIC_ID=${TELEGRAM_TOPIC_ID}
+TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY}
 EOF
 chmod 600 "${TMP_ENV}"
 cp "${ROOT}/scripts/bunny-upload.sh" "${TMP_DIR}/bunny-upload.sh"
 cp "${ROOT}/scripts/finalize_recording.sh" "${TMP_DIR}/finalize_recording.sh"
+[[ -f "${ROOT}/scripts/telegram-notify.sh" ]] && cp "${ROOT}/scripts/telegram-notify.sh" "${TMP_DIR}/telegram-notify.sh"
 
 KEY_HINT="${BUNNY_API_KEY:0:8}…"
 log "Bunny update"
@@ -127,10 +136,10 @@ for idx in "${!JIBRI_NAMES[@]}"; do
   name="${JIBRI_NAMES[$idx]}"
   ip="${JIBRI_PRIVATE_IPS[$idx]}"
   log "→ ${name} (${ip})"
+  scp_files=("${TMP_ENV}" "${TMP_DIR}/bunny-upload.sh" "${TMP_DIR}/finalize_recording.sh")
+  [[ -f "${TMP_DIR}/telegram-notify.sh" ]] && scp_files+=("${TMP_DIR}/telegram-notify.sh")
   if scp -q "${ssh_opts[@]}" "${JUMP_OPTS[@]}" \
-      "${TMP_ENV}" \
-      "${TMP_DIR}/bunny-upload.sh" \
-      "${TMP_DIR}/finalize_recording.sh" \
+      "${scp_files[@]}" \
       "ubuntu@${ip}:/tmp/" \
     && ssh "${ssh_opts[@]}" "${JUMP_OPTS[@]}" "ubuntu@${ip}" "sudo bash -s" <<'REMOTE'
 set -euo pipefail
@@ -140,7 +149,10 @@ chmod 600 /opt/jitsi-jibri/bunny.env
 chown jibri:jibri /opt/jitsi-jibri/bunny.env
 install -m 755 -o jibri -g jibri /tmp/bunny-upload.sh /opt/jitsi-jibri/bunny-upload.sh
 install -m 755 -o jibri -g jibri /tmp/finalize_recording.sh /opt/jitsi-jibri/finalize_recording.sh
-rm -f /tmp/bunny-upload.sh /tmp/finalize_recording.sh
+if [[ -f /tmp/telegram-notify.sh ]]; then
+  install -m 755 -o jibri -g jibri /tmp/telegram-notify.sh /opt/jitsi-jibri/telegram-notify.sh
+fi
+rm -f /tmp/bunny-upload.sh /tmp/finalize_recording.sh /tmp/telegram-notify.sh
 grep -E '^BUNNY_LIBRARY_ID=|^BUNNY_CDN_HOSTNAME=|^PORTAL_UPLOAD_META_URL=' /opt/jitsi-jibri/bunny.env
 test -s /opt/jitsi-jibri/bunny.env
 test -x /opt/jitsi-jibri/bunny-upload.sh

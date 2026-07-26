@@ -86,6 +86,10 @@ Uğurlu olsa `https://${DOMAIN}` yenilə — padlock görünməlidir.
 | `CONCURRENT_RECORDINGS` | | Default `10` (2×5 Jibri) |
 | `CLOUDFLARE_*` | | DNS avtomatik |
 | `SCHEDULE_*` | | Default: 03:30–06:05 UTC (= 07:30–10:05 Bakı) |
+| `TELEGRAM_BOT_TOKEN` | | Telegram bot token (BotFather) |
+| `TELEGRAM_CHAT_ID` | | Qrup/channel id (`-100...`) |
+| `TELEGRAM_TOPIC_ID` | | Forum topic `message_thread_id` |
+| `TELEGRAM_NOTIFY` | | `true`/`false` (default: token varsa on) |
 
 ---
 
@@ -113,6 +117,58 @@ Skript nə edir:
 ```
 
 **Portal:** production-da `JITSI_DOMAIN` də eyni NEW domain olmalıdır, sonra portal restart.
+
+---
+
+## Telegram bildirişlər
+
+Bot ilə deploy, scheduler, health və recording hadisələri Telegram-a düşür.
+
+**Quraşdırma**
+
+1. [@BotFather](https://t.me/BotFather) → `/newbot` → `TELEGRAM_BOT_TOKEN`
+2. Bota (və ya qrupa botu əlavə edib) `/start`
+3. `chat_id` al:
+
+```bash
+curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq '.result[-1].message.chat.id'
+```
+
+4. `.env`:
+
+```bash
+TELEGRAM_BOT_TOKEN=123456:ABC...
+TELEGRAM_CHAT_ID=-100xxxxxxxxxx
+TELEGRAM_TOPIC_ID=2
+TELEGRAM_NOTIFY=true
+```
+
+5. Mövcud cluster (redeploy olmadan):
+
+```bash
+./scripts/install-telegram-alerts.sh
+```
+
+Yeni deploy-da token `.env`-dədirsə avtomatik quraşır.
+
+**Hadisələr**
+
+| Mənbə | Nə vaxt |
+|-------|---------|
+| `deploy.sh` | uğurlu / uğursuz |
+| Cloud Scheduler TG jobs | start/stop (və şənbə) pəncərəsi |
+| `schedule-all.sh` | manual start/stop |
+| meet-control cron `*/5` | xidmət/HTTPS/SSL/disk/CPU/JVB/Jibri; recording busy/idle |
+| `finalize_recording.sh` / `bunny-upload.sh` | finalize + Bunny OK/FAIL |
+
+Health spam-i azdır: yalnız status dəyişəndə; CRITICAL ~60 dəq-də bir təkrarlana bilər. Log: `/var/log/jitsi/health-notify.log`.
+
+**Test**
+
+```bash
+source .env
+./scripts/telegram-notify.sh "Jitsi test $(date -Iseconds)"
+```
 
 ---
 
@@ -244,6 +300,10 @@ jitsi-cluster/
 │   ├── setup-jibri.sh      # multi-slot Jibri
 │   ├── bunny-upload.sh
 │   ├── finalize_recording.sh
+│   ├── telegram-notify.sh
+│   ├── health-notify.sh
+│   ├── install-telegram-alerts.sh
+│   ├── install-telegram-scheduler-jobs.sh
 │   ├── schedule-all.sh
 │   ├── scheduler-pause-keep-on.sh
 │   ├── scheduler-resume.sh
@@ -275,6 +335,7 @@ Daha çox paralel recording: `CONCURRENT_RECORDINGS` artırın və ya [Quota](ht
 | `connection refused` (Terraform) | Cloud Shell → GCP API şəbəkəsi; bir az sonra `./deploy.sh` |
 | `409 alreadyExists` (NAT/IP/VM) | `deploy.sh` avtomatik import edir (`tf-import-existing.sh`, NAT daxil) |
 | **Not Secure** / self-signed | DNS → control IP, sonra [SSL / Let's Encrypt](#ssl--lets-encrypt-not-secure) |
+| Telegram gəlmir | `.env` token/chat; `./scripts/telegram-notify.sh "test"`; control: `cron.d/jitsi-health-notify` |
 | Bunny key/library | `.env` yenilə → `./update-bunny.sh` |
 | `Not ready yet` / ingress UI fərqli | `./repair-join.sh` (JVB+focus+Jibri Prosody auth) |
 | Recording düyməsi yoxdur | `journalctl -u 'jibri@*' -n 50` |

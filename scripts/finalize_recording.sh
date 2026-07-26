@@ -64,8 +64,17 @@ done
 # Optional: strip metadata / ensure readable
 chown -R jibri:jibri "${RECORDING_DIR}" 2>/dev/null || true
 
+TG="/opt/jitsi-jibri/telegram-notify.sh"
+[[ -x "${TG}" ]] || TG="/opt/jitsi-cluster/telegram-notify.sh"
+tg() { [[ -x "${TG}" ]] && "${TG}" "$*" || true; }
+
+ROOM_HINT="$(basename "${RECORDING_DIR}")"
+HOST_HINT="$(hostname -s 2>/dev/null || hostname)"
+
 if ! "${UPLOAD}" "${RECORDING_DIR}"; then
   echo "ERROR: bunny-upload failed for ${RECORDING_DIR}"
+  tg "Jitsi recording finalize FAIL @ ${HOST_HINT}: ${ROOM_HINT}"
   exit 1
 fi
+tg "Jitsi recording finalized @ ${HOST_HINT}: ${ROOM_HINT}"
 echo "==== done $(date -Iseconds) ===="

@@ -16,7 +16,14 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err()  { echo -e "${RED}[x]${NC} $*" >&2; }
-die()  { err "$*"; exit 1; }
+tg_notify() {
+  bash "${ROOT}/scripts/telegram-notify.sh" "$*" 2>/dev/null || true
+}
+die() {
+  err "$*"
+  tg_notify "Jitsi deploy FAILED (${GCP_PROJECT_ID:-?} / ${DOMAIN:-?}): $*"
+  exit 1
+}
 
 # Skript icazələri (chmod əl ilə lazım deyil)
 chmod +x "${ROOT}/deploy.sh" "${ROOT}/destroy.sh" 2>/dev/null || true
@@ -54,6 +61,11 @@ BUNNY_CDN_HOSTNAME="${BUNNY_CDN_HOSTNAME:-}"
 # Optional: Jibri → ingress portal (room UUID → teacher Bunny collection)
 PORTAL_UPLOAD_META_URL="${PORTAL_UPLOAD_META_URL:-}"
 PORTAL_UPLOAD_META_TOKEN="${PORTAL_UPLOAD_META_TOKEN:-}"
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
+TELEGRAM_TOPIC_ID="${TELEGRAM_TOPIC_ID:-}"
+TELEGRAM_NOTIFY="${TELEGRAM_NOTIFY:-true}"
+export TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID TELEGRAM_TOPIC_ID TELEGRAM_NOTIFY
 
 # Recording upload üçün Bunny məcburidir (boş olsa finalize fail olur)
 if [[ -z "${BUNNY_LIBRARY_ID}" || -z "${BUNNY_API_KEY}" ]]; then
@@ -370,6 +382,8 @@ remote_sync() {
   ssh "${ssh_opts[@]}" "${extra_opts[@]}" "ubuntu@${host}" "chmod +x /tmp/jitsi-cluster/scripts/*.sh"
 }
 
+RECORDER_IPS_CSV="$(IFS=,; echo "${JIBRI_IP_LIST[*]}")"
+
 log "Skriptlər control-a kopyalanır..."
 remote_sync "${CONTROL_PUBLIC_IP}"
 
@@ -386,8 +400,21 @@ export TURN_SECRET='${TURN_SECRET}'
 export JVB_PUBLIC_IP='${JVB_PUBLIC_IP}'
 export JVB_PRIVATE_IP='${JVB_PRIVATE_IP}'
 export CONTROL_PUBLIC_IP='${CONTROL_PUBLIC_IP}'
+export JIBRI_PER_VM='${JIBRI_PER_VM}'
+export RECORDER_PRIVATE_IPS='${RECORDER_IPS_CSV}'
+export TELEGRAM_BOT_TOKEN='${TELEGRAM_BOT_TOKEN}'
+export TELEGRAM_CHAT_ID='${TELEGRAM_CHAT_ID}'
+export TELEGRAM_TOPIC_ID='${TELEGRAM_TOPIC_ID}'
+export TELEGRAM_NOTIFY='${TELEGRAM_NOTIFY}'
 bash /tmp/jitsi-cluster/scripts/setup-control.sh
 REMOTE
+
+# Health-check üçün control → recorder SSH açarı
+if [[ -n "${TELEGRAM_BOT_TOKEN}" && -n "${TELEGRAM_CHAT_ID}" && -f "${SSH_PRIV}" ]]; then
+  scp -q "${ssh_opts[@]}" "${SSH_PRIV}" "ubuntu@${CONTROL_PUBLIC_IP}:/tmp/deploy_key"
+  ssh "${ssh_opts[@]}" "ubuntu@${CONTROL_PUBLIC_IP}" \
+    "sudo mv /tmp/deploy_key /opt/jitsi-cluster/deploy_key && sudo chmod 600 /opt/jitsi-cluster/deploy_key && sudo chown root:root /opt/jitsi-cluster/deploy_key"
+fi
 
 # Prosody: allow remote c2s (bind all interfaces)
 ssh "${ssh_opts[@]}" "ubuntu@${CONTROL_PUBLIC_IP}" "sudo bash -s" <<'REMOTE'
@@ -436,6 +463,10 @@ export BUNNY_API_KEY='${BUNNY_API_KEY}'
 export BUNNY_CDN_HOSTNAME='${BUNNY_CDN_HOSTNAME}'
 export PORTAL_UPLOAD_META_URL='${PORTAL_UPLOAD_META_URL}'
 export PORTAL_UPLOAD_META_TOKEN='${PORTAL_UPLOAD_META_TOKEN}'
+export TELEGRAM_BOT_TOKEN='${TELEGRAM_BOT_TOKEN}'
+export TELEGRAM_CHAT_ID='${TELEGRAM_CHAT_ID}'
+export TELEGRAM_TOPIC_ID='${TELEGRAM_TOPIC_ID}'
+export TELEGRAM_NOTIFY='${TELEGRAM_NOTIFY}'
 bash /tmp/jitsi-cluster/scripts/setup-jibri.sh
 REMOTE
   ) > "${SECRETS_DIR}/setup-${name}.log" 2>&1 &
@@ -473,10 +504,23 @@ if [[ "${ENABLE_SCHEDULE}" == "true" ]]; then
     export SCHEDULE_SAT_START_CRON SCHEDULE_SAT_STOP_CRON
     export SCHEDULER_SA_EMAIL="${SA_EMAIL}"
     bash "${ROOT}/scripts/install-scheduler-jobs.sh" || warn "Scheduler jobs qismən uğursuz"
+    if [[ -n "${TELEGRAM_BOT_TOKEN}" && -n "${TELEGRAM_CHAT_ID}" ]]; then
+      export DOMAIN TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID TELEGRAM_TOPIC_ID
+      export SCHEDULE_START_CRON SCHEDULE_STOP_CRON SCHEDULE_TIMEZONE
+      export SCHEDULE_SAT_START_CRON SCHEDULE_SAT_STOP_CRON
+      bash "${ROOT}/scripts/install-telegram-scheduler-jobs.sh" || warn "Telegram scheduler jobs qismən uğursuz"
+    fi
   else
     warn "jitsi-scheduler SA tapılmadı — terraform schedule yoxlayın"
   fi
 fi
+
+tg_notify "Jitsi deploy OK
+project=${GCP_PROJECT_ID}
+url=https://${DOMAIN}
+control=${CONTROL_PUBLIC_IP}
+jvb=${JVB_PUBLIC_IP}
+recorders=${#JIBRI_NAMES[@]}×${JIBRI_PER_VM}"
 
 # ---------- Summary ----------
 cat <<EOF

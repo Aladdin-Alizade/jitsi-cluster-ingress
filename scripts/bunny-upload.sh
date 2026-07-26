@@ -45,6 +45,10 @@ elif [[ -z "${BUNNY_LIBRARY_ID:-}" || -z "${BUNNY_API_KEY:-}" ]]; then
   exit 1
 fi
 
+TG_BIN="${TELEGRAM_NOTIFY_BIN:-/opt/jitsi-jibri/telegram-notify.sh}"
+[[ -x "${TG_BIN}" ]] || TG_BIN="/opt/jitsi-cluster/telegram-notify.sh"
+tg() { [[ -x "${TG_BIN}" ]] && "${TG_BIN}" "$*" || true; }
+
 RECORDING_DIR="${1:-}"
 if [[ -z "${RECORDING_DIR}" || ! -d "${RECORDING_DIR}" ]]; then
   err "Recording directory yoxdur: ${RECORDING_DIR}"
@@ -310,11 +314,21 @@ for SRC in "${MP4S[@]}"; do
     # Auto-create published lesson on ingress portal (title: DD.MM.YYYY-part-N)
     notify_portal_recording_complete "${ROOM_NAME}" "${VIDEO_ID}" || true
 
+    tg "Jitsi Bunny upload OK
+room=${ROOM_NAME}
+video_id=${VIDEO_ID}
+library=${LIBRARY_ID}
+collection=${COLLECTION_ID:-root}"
+
     rm -f "${SRC}"
     OK=1
   else
     err "Upload failed HTTP ${HTTP_CODE} for ${SRC} (video_id=${VIDEO_ID})"
     cat "${RESP_FILE}" >&2 || true
+    tg "Jitsi Bunny upload FAIL
+room=${ROOM_NAME}
+video_id=${VIDEO_ID}
+http=${HTTP_CODE}"
     # Best-effort cleanup of empty video object
     curl -sS --connect-timeout 10 --max-time 30 -X DELETE \
       "${STREAM_API}/library/${LIBRARY_ID}/videos/${VIDEO_ID}" \
@@ -331,4 +345,5 @@ if [[ "${OK}" -eq 1 ]]; then
   exit 0
 fi
 
+tg "Jitsi Bunny upload FAIL (no OK files) room=${ROOM_NAME:-?} dir=${RECORDING_DIR}"
 exit 1

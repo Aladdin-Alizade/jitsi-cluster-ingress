@@ -270,7 +270,7 @@ systemctl reload nginx || systemctl restart nginx
 systemctl enable prosody jicofo nginx
 
 # Write cluster secrets for remote nodes (local only)
-mkdir -p /opt/jitsi-cluster
+mkdir -p /opt/jitsi-cluster /var/lib/jitsi-cluster
 cat > /opt/jitsi-cluster/cluster.env <<ENV
 DOMAIN=${DOMAIN}
 CONTROL_PRIVATE_IP=$(private_ip)
@@ -282,8 +282,45 @@ JICOFO_PASSWORD=${JICOFO_PASSWORD}
 JIBRI_RECORDER_PASS=${JIBRI_RECORDER_PASS}
 JIBRI_XMPP_PASS=${JIBRI_XMPP_PASS}
 TURN_SECRET=${TURN_SECRET}
+JIBRI_PER_VM=${JIBRI_PER_VM:-5}
+RECORDER_PRIVATE_IPS=${RECORDER_PRIVATE_IPS:-}
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+TELEGRAM_TOPIC_ID=${TELEGRAM_TOPIC_ID:-}
+TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY:-true}
 ENV
 chmod 600 /opt/jitsi-cluster/cluster.env
+
+# Telegram notify + health cron
+if [[ -f "${SCRIPT_DIR}/telegram-notify.sh" ]]; then
+  cp "${SCRIPT_DIR}/telegram-notify.sh" /opt/jitsi-cluster/telegram-notify.sh
+  chmod 755 /opt/jitsi-cluster/telegram-notify.sh
+fi
+if [[ -f "${SCRIPT_DIR}/health-notify.sh" ]]; then
+  cp "${SCRIPT_DIR}/health-notify.sh" /opt/jitsi-cluster/health-notify.sh
+  chmod 755 /opt/jitsi-cluster/health-notify.sh
+fi
+cat > /opt/jitsi-cluster/telegram.env <<TGENV
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+TELEGRAM_TOPIC_ID=${TELEGRAM_TOPIC_ID:-}
+TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY:-true}
+TGENV
+chmod 600 /opt/jitsi-cluster/telegram.env
+
+if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+  CRON_LINE='*/5 * * * * root /opt/jitsi-cluster/health-notify.sh >>/var/log/jitsi/health-notify.log 2>&1'
+  mkdir -p /var/log/jitsi
+  touch /var/log/jitsi/health-notify.log
+  echo "${CRON_LINE}" > /etc/cron.d/jitsi-health-notify
+  chmod 644 /etc/cron.d/jitsi-health-notify
+  systemctl enable --now cron 2>/dev/null || systemctl enable --now crond 2>/dev/null || true
+  log "Telegram health cron quraşdırıldı (*/5)"
+  /opt/jitsi-cluster/telegram-notify.sh "Jitsi meet-control setup OK: https://${DOMAIN}" || true
+else
+  rm -f /etc/cron.d/jitsi-health-notify
+  log "Telegram token/chat boş — health cron skip"
+fi
 
 log "Control hazır: https://${DOMAIN}"
 for svc in prosody jicofo nginx; do

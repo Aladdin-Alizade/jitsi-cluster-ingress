@@ -20,13 +20,16 @@ URI="https://api.telegram.org/bot${TOKEN}/sendMessage"
 
 ensure_tg_job() {
   local name="$1" cron="$2" text="$3"
-  local body
+  local body_file
+  body_file="$(mktemp)"
   if [[ -n "${TOPIC}" ]]; then
-    body="$(jq -nc --arg c "${CHAT}" --arg t "${text}" --argjson th "${TOPIC}" \
-      '{chat_id:$c,text:$t,message_thread_id:$th,disable_web_page_preview:true}')"
+    jq -nc --arg c "${CHAT}" --arg t "${text}" --argjson th "${TOPIC}" \
+      '{chat_id:$c,text:$t,message_thread_id:$th,disable_web_page_preview:true}' \
+      >"${body_file}"
   else
-    body="$(jq -nc --arg c "${CHAT}" --arg t "${text}" \
-      '{chat_id:$c,text:$t,disable_web_page_preview:true}')"
+    jq -nc --arg c "${CHAT}" --arg t "${text}" \
+      '{chat_id:$c,text:$t,disable_web_page_preview:true}' \
+      >"${body_file}"
   fi
 
   if gcloud scheduler jobs describe "${name}" --location="${REGION}" --project="${PROJECT_ID}" &>/dev/null; then
@@ -38,7 +41,8 @@ ensure_tg_job() {
       --uri="${URI}" \
       --http-method=POST \
       --headers="Content-Type=application/json" \
-      --message-body="${body}" \
+      --message-body-from-file="${body_file}" \
+      --attempt-deadline=30s \
       --quiet
   else
     gcloud scheduler jobs create http "${name}" \
@@ -49,15 +53,21 @@ ensure_tg_job() {
       --uri="${URI}" \
       --http-method=POST \
       --headers="Content-Type=application/json" \
-      --message-body="${body}" \
+      --message-body-from-file="${body_file}" \
+      --attempt-deadline=30s \
       --quiet
   fi
+  rm -f "${body_file}"
   gcloud scheduler jobs resume "${name}" \
     --location="${REGION}" \
     --project="${PROJECT_ID}" \
     --quiet 2>/dev/null || true
   echo "[+] telegram job ${name} (${cron} ${TZ_NAME})"
 }
+
+echo "[+] Creating Telegram scheduler jobs (region=${REGION}, tz=${TZ_NAME})"
+echo "    start cron: ${START_CRON}"
+echo "    stop  cron: ${STOP_CRON}"
 
 ensure_tg_job "jitsi-tg-notify-start" "${START_CRON}" \
   "Jitsi scheduler START window (${DOMAIN} / ${PROJECT_ID}) — VMs starting"
@@ -72,3 +82,5 @@ if [[ -n "${SAT_START_CRON}" && -n "${SAT_STOP_CRON}" ]]; then
 fi
 
 echo "Telegram scheduler notify jobs ready"
+gcloud scheduler jobs list --location="${REGION}" --project="${PROJECT_ID}" \
+  --filter='name:jitsi-tg-notify' --format='table(name,schedule,timeZone,state)' || true

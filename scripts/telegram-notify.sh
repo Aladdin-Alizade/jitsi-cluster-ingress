@@ -15,9 +15,11 @@ set +e
 set +u
 
 _load_telegram_env() {
-  local f
+  local f root
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd 2>/dev/null || true)"
   for f in \
     "${TELEGRAM_ENV_FILE:-}" \
+    "${root}/.env" \
     /opt/jitsi-cluster/telegram.env \
     /opt/jitsi-jibri/telegram.env \
     /opt/jitsi-cluster/cluster.env \
@@ -40,6 +42,9 @@ CHAT="${TELEGRAM_CHAT_ID:-}"
 TOPIC="${TELEGRAM_TOPIC_ID:-}"
 
 if [[ -z "${TOKEN}" || -z "${CHAT}" ]]; then
+  if [[ "${TELEGRAM_DEBUG:-}" == "1" || "${TELEGRAM_DEBUG:-}" == "true" ]]; then
+    echo "telegram-notify: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID empty (export or .env)" >&2
+  fi
   exit 0
 fi
 if [[ "${NOTIFY}" == "false" || "${NOTIFY}" == "0" || "${NOTIFY}" == "no" ]]; then

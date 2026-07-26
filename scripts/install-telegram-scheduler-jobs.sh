@@ -32,8 +32,9 @@ ensure_tg_job() {
       >"${body_file}"
   fi
 
+  # Köhnə/səhv job olsa yenidən yarat (auth/body qalıqları üçün)
   if gcloud scheduler jobs describe "${name}" --location="${REGION}" --project="${PROJECT_ID}" &>/dev/null; then
-    gcloud scheduler jobs update http "${name}" \
+    if ! gcloud scheduler jobs update http "${name}" \
       --location="${REGION}" \
       --project="${PROJECT_ID}" \
       --schedule="${cron}" \
@@ -43,7 +44,22 @@ ensure_tg_job() {
       --headers="Content-Type=application/json" \
       --message-body-from-file="${body_file}" \
       --attempt-deadline=30s \
-      --quiet
+      --quiet; then
+      echo "[!] update fail ${name} — recreate"
+      gcloud scheduler jobs delete "${name}" \
+        --location="${REGION}" --project="${PROJECT_ID}" --quiet || true
+      gcloud scheduler jobs create http "${name}" \
+        --location="${REGION}" \
+        --project="${PROJECT_ID}" \
+        --schedule="${cron}" \
+        --time-zone="${TZ_NAME}" \
+        --uri="${URI}" \
+        --http-method=POST \
+        --headers="Content-Type=application/json" \
+        --message-body-from-file="${body_file}" \
+        --attempt-deadline=30s \
+        --quiet
+    fi
   else
     gcloud scheduler jobs create http "${name}" \
       --location="${REGION}" \

@@ -97,11 +97,20 @@ TELEGRAM_TOPIC_ID=${TELEGRAM_TOPIC_ID}
 TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY}
 EOF
 
-echo '*/5 * * * * root /opt/jitsi-cluster/health-notify.sh >>/var/log/jitsi/health-notify.log 2>&1' \
-  > /etc/cron.d/jitsi-health-notify
+cat > /etc/cron.d/jitsi-health-notify <<'CRON'
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+SHELL=/bin/bash
+*/5 * * * * root /opt/jitsi-cluster/health-notify.sh >>/var/log/jitsi/health-notify.log 2>&1
+CRON
 chmod 644 /etc/cron.d/jitsi-health-notify
 touch /var/log/jitsi/health-notify.log
+# köhnə shell-state faylı
+rm -f /var/lib/jitsi-cluster/health-state
 systemctl enable --now cron 2>/dev/null || true
+
+# jq/curl health + telegram üçün
+command -v jq >/dev/null || apt-get install -y -qq jq >/dev/null 2>&1 || true
+command -v curl >/dev/null || apt-get install -y -qq curl >/dev/null 2>&1 || true
 
 /opt/jitsi-cluster/telegram-notify.sh "Jitsi Telegram alerts installed on meet-control (${DOMAIN})"
 REMOTE

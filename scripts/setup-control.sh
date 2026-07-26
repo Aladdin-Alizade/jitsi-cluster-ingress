@@ -309,10 +309,13 @@ TGENV
 chmod 600 /opt/jitsi-cluster/telegram.env
 
 if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
-  CRON_LINE='*/5 * * * * root /opt/jitsi-cluster/health-notify.sh >>/var/log/jitsi/health-notify.log 2>&1'
-  mkdir -p /var/log/jitsi
+  mkdir -p /var/log/jitsi /var/lib/jitsi-cluster
   touch /var/log/jitsi/health-notify.log
-  echo "${CRON_LINE}" > /etc/cron.d/jitsi-health-notify
+  cat > /etc/cron.d/jitsi-health-notify <<'CRON'
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+SHELL=/bin/bash
+*/5 * * * * root /opt/jitsi-cluster/health-notify.sh >>/var/log/jitsi/health-notify.log 2>&1
+CRON
   chmod 644 /etc/cron.d/jitsi-health-notify
   systemctl enable --now cron 2>/dev/null || systemctl enable --now crond 2>/dev/null || true
   log "Telegram health cron quraşdırıldı (*/5)"

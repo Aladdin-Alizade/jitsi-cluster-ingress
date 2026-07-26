@@ -48,6 +48,31 @@ DNS A record: `DOMAIN → meet-control IP` (Cloudflare token versəniz avtomatik
 
 ---
 
+## SSL / Let's Encrypt (`Not Secure`)
+
+Deploy zamanı DNS hələ `meet-control` IP-yə getmirsə, Let's Encrypt uğursuz olur və **self-signed** sertifikat qalır — brauzer **Not Secure** göstərir.
+
+DNS A record-u qoyduqdan sonra (yayımlandıqdan sonra) sertifikatı yenilə:
+
+```bash
+cd ~/jitsi/jitsi-cluster-ingress
+source .env
+
+# DNS doğrula — çıxan IP = control public IP olmalıdır
+dig +short ${DOMAIN} A @8.8.8.8
+terraform -chdir=terraform output -raw control_public_ip
+
+# Let's Encrypt yenidən quraşdır
+gcloud compute ssh meet-control --zone=${GCP_ZONE} --project=${GCP_PROJECT_ID} -- \
+  "sudo bash -c 'echo y | /usr/share/jitsi-meet/scripts/install-letsencrypt-cert.sh ${ADMIN_EMAIL} ${DOMAIN}'"
+```
+
+Uğurlu olsa `https://${DOMAIN}` yenilə — padlock görünməlidir.
+
+**Cloudflare:** LE zamanı record **DNS only** (boz bulud) olsun; bitəndən sonra istəsən Proxied (narıncı) aç.
+
+---
+
 ## `.env`
 
 | Dəyişən | Məcburi | İzah |
@@ -249,6 +274,7 @@ Daha çox paralel recording: `CONCURRENT_RECORDINGS` artırın və ya [Quota](ht
 | `CPUS_ALL_REGIONS` exceeded | `RECORDER_COUNT` / `JIBRI_MACHINE_TYPE` azaldın və ya quota |
 | `connection refused` (Terraform) | Cloud Shell → GCP API şəbəkəsi; bir az sonra `./deploy.sh` |
 | `409 alreadyExists` (NAT/IP/VM) | `deploy.sh` avtomatik import edir (`tf-import-existing.sh`, NAT daxil) |
+| **Not Secure** / self-signed | DNS → control IP, sonra [SSL / Let's Encrypt](#ssl--lets-encrypt-not-secure) |
 | Bunny key/library | `.env` yenilə → `./update-bunny.sh` |
 | `Not ready yet` / ingress UI fərqli | `./repair-join.sh` (JVB+focus+Jibri Prosody auth) |
 | Recording düyməsi yoxdur | `journalctl -u 'jibri@*' -n 50` |

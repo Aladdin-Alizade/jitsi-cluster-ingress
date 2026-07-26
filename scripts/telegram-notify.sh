@@ -65,10 +65,21 @@ else
     '{chat_id:$c,text:$t,disable_web_page_preview:true}')"
 fi
 
-curl -sS --connect-timeout 8 --max-time 20 \
+RESP="$(curl -sS --connect-timeout 8 --max-time 20 \
   -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
   -H "Content-Type: application/json" \
-  --data "${BODY}" \
-  >/dev/null 2>&1 || true
+  --data "${BODY}" 2>&1)" || true
+
+if [[ "${TELEGRAM_DEBUG:-}" == "1" || "${TELEGRAM_DEBUG:-}" == "true" ]]; then
+  echo "${RESP}" >&2
+fi
+# Uğursuz olsa DEBUG olmadan da qısa xəbərdarlıq (test üçün)
+if ! echo "${RESP}" | jq -e '.ok == true' >/dev/null 2>&1; then
+  if [[ "${TELEGRAM_DEBUG:-}" == "1" || "${TELEGRAM_DEBUG:-}" == "true" ]]; then
+    true
+  else
+    echo "telegram-notify: send failed (TELEGRAM_DEBUG=1 for details)" >&2
+  fi
+fi
 
 exit 0

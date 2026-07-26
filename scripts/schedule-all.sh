@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Bütün Jitsi VM-lərini start/stop edir (Cloud Scheduler → Pub/Sub → bu skript əvəzinə
-# deploy.sh gcloud scheduler jobs yaradır ki, hər VM üçün start/stop çağırılsın).
+# Bütün Jitsi VM-lərini start/stop edir.
 #
 # Manual:
 #   ./scripts/schedule-all.sh start
@@ -15,19 +14,36 @@ ACTION="${1:?usage: schedule-all.sh start|stop}"
 PROJECT_ID="${GCP_PROJECT_ID:?}"
 ZONE="${GCP_ZONE:?}"
 
-tg() {
+if [[ -f "${ROOT}/.env" ]]; then
+  set -a
   # shellcheck disable=SC1091
-  if [[ -f "${ROOT}/.env" ]]; then
-    set -a
-    # shellcheck source=/dev/null
-    source "${ROOT}/.env"
-    set +a
-  fi
+  source "${ROOT}/.env"
+  set +a
+fi
+
+TZ_NAME="${SCHEDULE_TIMEZONE:-UTC}"
+WD_START="${SCHEDULE_START_UTC:-?}"
+WD_STOP="${SCHEDULE_STOP_UTC:-?}"
+WD_DAYS="${SCHEDULE_WEEKDAYS:-1-5}"
+SAT_START="${SCHEDULE_SAT_START_UTC:-}"
+SAT_STOP="${SCHEDULE_SAT_STOP_UTC:-}"
+DOMAIN="${DOMAIN:-jitsi}"
+
+case "${WD_DAYS}" in
+  1-5|1,2,3,4,5) WD_LABEL="Həftəiçi (Mon–Fri)" ;;
+  *) WD_LABEL="Günlər ${WD_DAYS}" ;;
+esac
+
+WINDOW_HINT="${WD_LABEL} ${WD_START}→${WD_STOP} (${TZ_NAME})"
+if [[ -n "${SAT_START}" && -n "${SAT_STOP}" ]]; then
+  WINDOW_HINT+=$'\n'"saturday: ${SAT_START}→${SAT_STOP} (${TZ_NAME})"
+fi
+
+tg() {
   bash "${SCRIPT_DIR}/telegram-notify.sh" "$*" 2>/dev/null || true
 }
 
 INSTANCES=(meet-control meet-jvb)
-# recorder-1 .. recorder-N (və köhnə jibri-* adları) — bash 3.2 uyğun
 while IFS= read -r _name; do
   [[ -n "${_name}" ]] && INSTANCES+=("${_name}")
 done < <(gcloud compute instances list \
@@ -49,8 +65,27 @@ for name in "${INSTANCES[@]}"; do
 done
 
 echo "Done: ${ACTION} ${#INSTANCES[@]} instances"
-if (( ${#FAILS[@]} > 0 )); then
-  tg "Jitsi schedule-all ${ACTION}: partial fails (${PROJECT_ID}): ${FAILS[*]}"
+
+if [[ "${ACTION}" == "start" ]]; then
+  EVENT="MANUAL START — VM-lər açıqdır
+schedule window (reference): ${WINDOW_HINT}
+note: bu əl ilə start-dır; avtomatik STOP hələ cədvələ görə ${WD_STOP} (${TZ_NAME}) ola bilər"
 else
-  tg "Jitsi schedule-all ${ACTION} OK (${PROJECT_ID}): ${#INSTANCES[@]} VMs"
+  EVENT="MANUAL STOP — VM-lər sönülü
+schedule window (reference): ${WINDOW_HINT}
+note: bu əl ilə stop-dur; növbəti avtomatik START ${WD_START} (${TZ_NAME})"
+fi
+
+if (( ${#FAILS[@]} > 0 )); then
+  tg "Jitsi schedule-all ${ACTION} PARTIAL FAIL
+domain: ${DOMAIN}
+project: ${PROJECT_ID}
+vms: ${#INSTANCES[@]} (fails: ${FAILS[*]})
+${EVENT}"
+else
+  tg "Jitsi schedule-all ${ACTION} OK
+domain: ${DOMAIN}
+project: ${PROJECT_ID}
+vms: ${#INSTANCES[@]}
+${EVENT}"
 fi

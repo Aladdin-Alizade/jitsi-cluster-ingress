@@ -508,6 +508,8 @@ if [[ "${ENABLE_SCHEDULE}" == "true" ]]; then
       export DOMAIN TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID TELEGRAM_TOPIC_ID
       export SCHEDULE_START_CRON SCHEDULE_STOP_CRON SCHEDULE_TIMEZONE
       export SCHEDULE_SAT_START_CRON SCHEDULE_SAT_STOP_CRON
+      export SCHEDULE_START_UTC SCHEDULE_STOP_UTC SCHEDULE_WEEKDAYS
+      export SCHEDULE_SAT_START_UTC SCHEDULE_SAT_STOP_UTC
       bash "${ROOT}/scripts/install-telegram-scheduler-jobs.sh" || warn "Telegram scheduler jobs qismən uğursuz"
     fi
   else

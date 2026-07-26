@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Cloud Scheduler → birbaşa Telegram (VM sönəndə də start/stop xəbəri çatsın)
 # Eyni cron pəncərəsi ilə jitsi-tg-notify-start / stop (+ sat)
+# Mesajda pəncərə aralığı, timezone, növbəti stop/start qeyd olunur.
 
 set -euo pipefail
 
@@ -15,6 +16,18 @@ TOKEN="${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN lazımdır}"
 CHAT="${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID lazımdır}"
 TOPIC="${TELEGRAM_TOPIC_ID:-}"
 DOMAIN="${DOMAIN:-jitsi}"
+
+# İnsan oxunaqlı aralıq (.env HH:MM)
+WD_START="${SCHEDULE_START_UTC:-?}"
+WD_STOP="${SCHEDULE_STOP_UTC:-?}"
+WD_DAYS="${SCHEDULE_WEEKDAYS:-1-5}"
+SAT_START="${SCHEDULE_SAT_START_UTC:-}"
+SAT_STOP="${SCHEDULE_SAT_STOP_UTC:-}"
+
+case "${WD_DAYS}" in
+  1-5|1,2,3,4,5) WD_LABEL="Həftəiçi (Mon–Fri)" ;;
+  *) WD_LABEL="Günlər ${WD_DAYS}" ;;
+esac
 
 URI="https://api.telegram.org/bot${TOKEN}/sendMessage"
 
@@ -32,7 +45,6 @@ ensure_tg_job() {
       >"${body_file}"
   fi
 
-  # Köhnə/səhv job olsa yenidən yarat (auth/body qalıqları üçün)
   if gcloud scheduler jobs describe "${name}" --location="${REGION}" --project="${PROJECT_ID}" &>/dev/null; then
     if ! gcloud scheduler jobs update http "${name}" \
       --location="${REGION}" \
@@ -81,20 +93,52 @@ ensure_tg_job() {
   echo "[+] telegram job ${name} (${cron} ${TZ_NAME})"
 }
 
+MSG_WD_START="Jitsi SCHEDULER START
+domain: ${DOMAIN}
+project: ${PROJECT_ID}
+window: ${WD_LABEL}
+active: ${WD_START} → ${WD_STOP} (${TZ_NAME})
+event: pəncərə AÇILDI — VM-lər start olunur
+next: avtomatik STOP ${WD_STOP} (${TZ_NAME})
+note: bu 24/7 deyil; yalnız cədvəl aralığında aktivdir"
+
+MSG_WD_STOP="Jitsi SCHEDULER STOP
+domain: ${DOMAIN}
+project: ${PROJECT_ID}
+window: ${WD_LABEL}
+was active: ${WD_START} → ${WD_STOP} (${TZ_NAME})
+event: pəncərə BİTDİ — VM-lər stop olunur
+next: növbəti START ${WD_START} (${TZ_NAME}, ${WD_LABEL})
+note: cluster indi sönülü qalacaq (cədvəl aralığı bitdi; bütün gün aktiv deyildi)"
+
 echo "[+] Creating Telegram scheduler jobs (region=${REGION}, tz=${TZ_NAME})"
-echo "    start cron: ${START_CRON}"
-echo "    stop  cron: ${STOP_CRON}"
+echo "    weekday window: ${WD_START} → ${WD_STOP} (${WD_LABEL}, ${TZ_NAME})"
 
-ensure_tg_job "jitsi-tg-notify-start" "${START_CRON}" \
-  "Jitsi scheduler START window (${DOMAIN} / ${PROJECT_ID}) — VMs starting"
-ensure_tg_job "jitsi-tg-notify-stop" "${STOP_CRON}" \
-  "Jitsi scheduler STOP window (${DOMAIN} / ${PROJECT_ID}) — VMs stopping"
+ensure_tg_job "jitsi-tg-notify-start" "${START_CRON}" "${MSG_WD_START}"
+ensure_tg_job "jitsi-tg-notify-stop" "${STOP_CRON}" "${MSG_WD_STOP}"
 
-if [[ -n "${SAT_START_CRON}" && -n "${SAT_STOP_CRON}" ]]; then
-  ensure_tg_job "jitsi-tg-notify-sat-start" "${SAT_START_CRON}" \
-    "Jitsi Saturday START (${DOMAIN} / ${PROJECT_ID})"
-  ensure_tg_job "jitsi-tg-notify-sat-stop" "${SAT_STOP_CRON}" \
-    "Jitsi Saturday STOP (${DOMAIN} / ${PROJECT_ID})"
+if [[ -n "${SAT_START_CRON}" && -n "${SAT_STOP_CRON}" && -n "${SAT_START}" && -n "${SAT_STOP}" ]]; then
+  MSG_SAT_START="Jitsi SCHEDULER START (Saturday)
+domain: ${DOMAIN}
+project: ${PROJECT_ID}
+window: Şənbə
+active: ${SAT_START} → ${SAT_STOP} (${TZ_NAME})
+event: şənbə pəncərəsi AÇILDI — VM-lər start olunur
+next: avtomatik STOP ${SAT_STOP} (${TZ_NAME})
+note: bu 24/7 deyil; yalnız şənbə cədvəl aralığında aktivdir"
+
+  MSG_SAT_STOP="Jitsi SCHEDULER STOP (Saturday)
+domain: ${DOMAIN}
+project: ${PROJECT_ID}
+window: Şənbə
+was active: ${SAT_START} → ${SAT_STOP} (${TZ_NAME})
+event: şənbə pəncərəsi BİTDİ — VM-lər stop olunur
+next: növbəti weekday START ${WD_START} (${TZ_NAME}, ${WD_LABEL})
+note: cluster indi sönülü qalacaq (şənbə aralığı bitdi)"
+
+  echo "    saturday window: ${SAT_START} → ${SAT_STOP} (${TZ_NAME})"
+  ensure_tg_job "jitsi-tg-notify-sat-start" "${SAT_START_CRON}" "${MSG_SAT_START}"
+  ensure_tg_job "jitsi-tg-notify-sat-stop" "${SAT_STOP_CRON}" "${MSG_SAT_STOP}"
 fi
 
 echo "Telegram scheduler notify jobs ready"

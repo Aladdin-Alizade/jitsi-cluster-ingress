@@ -159,10 +159,21 @@ Yeni deploy-da token `.env`-dədirsə avtomatik quraşır.
 | Cloud Scheduler TG jobs | start/stop (və şənbə) pəncərəsi |
 | `schedule-all.sh` | manual start/stop |
 | meet-control cron `*/5` | xidmət/HTTPS/SSL/disk/CPU/JVB/Jibri; recording busy/idle; **CRITICAL-də full diag + portal live meetings (müəllim/qrup)** |
+| `jitsi-telegram-bot.service` | **interaktiv əmrlər:** `/status` `/live` `/recordings` `/help` |
 | `finalize_recording.sh` / `bunny-upload.sh` | finalize + Bunny OK/FAIL (**teacher / group / session**) |
 
 Health spam-i azdır: yalnız status dəyişəndə; CRITICAL ~60 dəq-də bir təkrarlana bilər.
 Log: `/var/log/jitsi/health-notify.log`. CRITICAL diaq: `/var/log/jitsi/health-diag/crit-*.log`.
+Bot log: `journalctl -u jitsi-telegram-bot -f`.
+
+**Bot əmrləri** (yalnız `.env`-dəki `TELEGRAM_CHAT_ID` chatından):
+
+| Əmr | Cavab |
+|-----|--------|
+| `/status` | nginx/prosody/jicofo, HTTPS, JVB, recorder SSH, Jibri, busy slotlar |
+| `/live` | portal açıq meetinglər (müəllim, qrup, room) |
+| `/recordings` | Jibri busy/idle + aktiv recording faylları + portal kontekst |
+| `/help` | əmr siyahısı |
 
 Portal (Ingress) API-lər (shared secret `PORTAL_UPLOAD_META_TOKEN`):
 
@@ -312,6 +323,7 @@ jitsi-cluster/
 │   ├── bunny-upload.sh
 │   ├── finalize_recording.sh
 │   ├── telegram-notify.sh
+│   ├── telegram-bot.sh
 │   ├── health-notify.sh
 │   ├── install-telegram-alerts.sh
 │   ├── install-telegram-scheduler-jobs.sh
@@ -347,6 +359,7 @@ Daha çox paralel recording: `CONCURRENT_RECORDINGS` artırın və ya [Quota](ht
 | `409 alreadyExists` (NAT/IP/VM) | `deploy.sh` avtomatik import edir (`tf-import-existing.sh`, NAT daxil) |
 | **Not Secure** / self-signed | DNS → control IP, sonra [SSL / Let's Encrypt](#ssl--lets-encrypt-not-secure) |
 | Telegram gəlmir | `.env` token/chat; `./scripts/telegram-notify.sh "test"`; control: `cron.d/jitsi-health-notify` |
+| Bot əmrləri cavab vermir | `systemctl status jitsi-telegram-bot`; `journalctl -u jitsi-telegram-bot -n 50`; chat_id düzgündürmü |
 | Bunny key/library | `.env` yenilə → `./update-bunny.sh` |
 | `Not ready yet` / ingress UI fərqli | `./repair-join.sh` (JVB+focus+Jibri Prosody auth) |
 | Recording düyməsi yoxdur | `journalctl -u 'jibri@*' -n 50` |

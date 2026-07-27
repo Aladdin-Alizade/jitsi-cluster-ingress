@@ -60,6 +60,7 @@ echo "[+] Control-a telegram + health quraşdırılır..."
 scp -q "${ssh_opts[@]}" \
   "${ROOT}/scripts/telegram-notify.sh" \
   "${ROOT}/scripts/health-notify.sh" \
+  "${ROOT}/scripts/telegram-bot.sh" \
   "ubuntu@${CONTROL_PUBLIC_IP}:/tmp/"
 scp -q "${ssh_opts[@]}" "${SSH_PRIV}" "ubuntu@${CONTROL_PUBLIC_IP}:/tmp/deploy_key"
 
@@ -68,6 +69,7 @@ set -euo pipefail
 mkdir -p /opt/jitsi-cluster /var/lib/jitsi-cluster /var/log/jitsi
 install -m 755 /tmp/telegram-notify.sh /opt/jitsi-cluster/telegram-notify.sh
 install -m 755 /tmp/health-notify.sh /opt/jitsi-cluster/health-notify.sh
+install -m 755 /tmp/telegram-bot.sh /opt/jitsi-cluster/telegram-bot.sh
 mv /tmp/deploy_key /opt/jitsi-cluster/deploy_key
 chmod 600 /opt/jitsi-cluster/deploy_key
 chown root:root /opt/jitsi-cluster/deploy_key
@@ -114,7 +116,29 @@ systemctl enable --now cron 2>/dev/null || true
 command -v jq >/dev/null || apt-get install -y -qq jq >/dev/null 2>&1 || true
 command -v curl >/dev/null || apt-get install -y -qq curl >/dev/null 2>&1 || true
 
-/opt/jitsi-cluster/telegram-notify.sh "Jitsi Telegram alerts installed on meet-control (${DOMAIN})"
+# Interactive Telegram bot (long-poll)
+cat > /etc/systemd/system/jitsi-telegram-bot.service <<'UNIT'
+[Unit]
+Description=Jitsi Telegram command bot (/status /live /recordings)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/jitsi-cluster/telegram-bot.sh
+Restart=always
+RestartSec=5
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now jitsi-telegram-bot.service
+systemctl restart jitsi-telegram-bot.service
+
+/opt/jitsi-cluster/telegram-notify.sh "Jitsi Telegram alerts + bot installed on meet-control (${DOMAIN})
+Əmrlər: /status /live /recordings /help"
 REMOTE
 
 echo "[+] Recorder-lərə telegram-notify + env..."
@@ -186,4 +210,5 @@ fi
 
 # test
 bash "${ROOT}/scripts/telegram-notify.sh" "Jitsi install-telegram-alerts.sh tamamlandı (${DOMAIN})"
-echo "[+] Hazır. Health: hər 5 dəq meet-control-da /var/log/jitsi/health-notify.log"
+echo "[+] Hazır. Health: */5 cron; Bot: jitsi-telegram-bot.service"
+echo "    Telegram əmrlər: /status /live /recordings /help"

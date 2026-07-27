@@ -293,7 +293,7 @@ PORTAL_UPLOAD_META_TOKEN=${PORTAL_UPLOAD_META_TOKEN:-}
 ENV
 chmod 600 /opt/jitsi-cluster/cluster.env
 
-# Telegram notify + health cron
+# Telegram notify + health cron + command bot
 if [[ -f "${SCRIPT_DIR}/telegram-notify.sh" ]]; then
   cp "${SCRIPT_DIR}/telegram-notify.sh" /opt/jitsi-cluster/telegram-notify.sh
   chmod 755 /opt/jitsi-cluster/telegram-notify.sh
@@ -301,6 +301,10 @@ fi
 if [[ -f "${SCRIPT_DIR}/health-notify.sh" ]]; then
   cp "${SCRIPT_DIR}/health-notify.sh" /opt/jitsi-cluster/health-notify.sh
   chmod 755 /opt/jitsi-cluster/health-notify.sh
+fi
+if [[ -f "${SCRIPT_DIR}/telegram-bot.sh" ]]; then
+  cp "${SCRIPT_DIR}/telegram-bot.sh" /opt/jitsi-cluster/telegram-bot.sh
+  chmod 755 /opt/jitsi-cluster/telegram-bot.sh
 fi
 cat > /opt/jitsi-cluster/telegram.env <<TGENV
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
@@ -321,10 +325,35 @@ CRON
   chmod 644 /etc/cron.d/jitsi-health-notify
   systemctl enable --now cron 2>/dev/null || systemctl enable --now crond 2>/dev/null || true
   log "Telegram health cron quraşdırıldı (*/5)"
-  /opt/jitsi-cluster/telegram-notify.sh "Jitsi meet-control setup OK: https://${DOMAIN}" || true
+
+  if [[ -x /opt/jitsi-cluster/telegram-bot.sh ]]; then
+    cat > /etc/systemd/system/jitsi-telegram-bot.service <<'UNIT'
+[Unit]
+Description=Jitsi Telegram command bot (/status /live /recordings)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/jitsi-cluster/telegram-bot.sh
+Restart=always
+RestartSec=5
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now jitsi-telegram-bot.service
+    log "Telegram command bot quraşdırıldı (jitsi-telegram-bot.service)"
+  fi
+
+  /opt/jitsi-cluster/telegram-notify.sh "Jitsi meet-control setup OK: https://${DOMAIN}
+Əmrlər: /status /live /recordings /help" || true
 else
   rm -f /etc/cron.d/jitsi-health-notify
-  log "Telegram token/chat boş — health cron skip"
+  systemctl disable --now jitsi-telegram-bot.service 2>/dev/null || true
+  log "Telegram token/chat boş — health cron + bot skip"
 fi
 
 log "Control hazır: https://${DOMAIN}"

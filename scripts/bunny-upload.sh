@@ -153,11 +153,16 @@ create_video() {
 
 # Resolve teacher+group Bunny collection via ingress portal (room UUID → collection_id).
 # Optional: PORTAL_UPLOAD_META_URL + PORTAL_UPLOAD_META_TOKEN in bunny.env
-# Also writes group_name to ${WORKDIR}/meta_group.txt when available.
+# Also writes portal meta fields under ${WORKDIR}/meta_*.txt for Telegram/logs.
 resolve_collection_id() {
   local room="$1"
-  local base token url resp cid gname
+  local base token url resp cid gname tname tuname sid gid mopen
   : > "${WORKDIR}/meta_group.txt"
+  : > "${WORKDIR}/meta_teacher.txt"
+  : > "${WORKDIR}/meta_teacher_user.txt"
+  : > "${WORKDIR}/meta_session.txt"
+  : > "${WORKDIR}/meta_group_id.txt"
+  : > "${WORKDIR}/meta_meeting_open.txt"
   base="${PORTAL_UPLOAD_META_URL:-}"
   token="${PORTAL_UPLOAD_META_TOKEN:-}"
   if [[ -z "${base}" || -z "${token}" || -z "${room}" ]]; then
@@ -176,7 +181,17 @@ resolve_collection_id() {
   }
   cid="$(echo "${resp}" | jq -r '.collection_id // empty' 2>/dev/null || true)"
   gname="$(echo "${resp}" | jq -r '.group_name // empty' 2>/dev/null || true)"
+  tname="$(echo "${resp}" | jq -r '.teacher_name // empty' 2>/dev/null || true)"
+  tuname="$(echo "${resp}" | jq -r '.teacher_username // empty' 2>/dev/null || true)"
+  sid="$(echo "${resp}" | jq -r '.session_id // empty' 2>/dev/null || true)"
+  gid="$(echo "${resp}" | jq -r '.group_id // empty' 2>/dev/null || true)"
+  mopen="$(echo "${resp}" | jq -r '.meeting_open // empty' 2>/dev/null || true)"
   [[ -n "${gname}" ]] && printf '%s' "${gname}" > "${WORKDIR}/meta_group.txt"
+  [[ -n "${tname}" ]] && printf '%s' "${tname}" > "${WORKDIR}/meta_teacher.txt"
+  [[ -n "${tuname}" ]] && printf '%s' "${tuname}" > "${WORKDIR}/meta_teacher_user.txt"
+  [[ -n "${sid}" && "${sid}" != "null" ]] && printf '%s' "${sid}" > "${WORKDIR}/meta_session.txt"
+  [[ -n "${gid}" && "${gid}" != "null" ]] && printf '%s' "${gid}" > "${WORKDIR}/meta_group_id.txt"
+  [[ -n "${mopen}" && "${mopen}" != "null" ]] && printf '%s' "${mopen}" > "${WORKDIR}/meta_meeting_open.txt"
   # Yalnız GUID qəbul et — log/HTML qarışmasın
   if [[ ! "${cid}" =~ ^[0-9a-fA-F-]{8,}$ ]]; then
     cid=""
@@ -185,7 +200,7 @@ resolve_collection_id() {
     log "upload-meta: collection yoxdur (room=${room}) — library root-a yazılacaq"
     log "upload-meta response: ${resp}"
   else
-    log "upload-meta: collection=${cid} group=${gname:-?} (room=${room})"
+    log "upload-meta: collection=${cid} group=${gname:-?} teacher=${tname:-?} (room=${room})"
   fi
   echo "${cid}"
 }
@@ -260,6 +275,22 @@ upload_video_file() {
 
 COLLECTION_ID="$(resolve_collection_id "${ROOM_NAME}")"
 GROUP_NAME="$(cat "${WORKDIR}/meta_group.txt" 2>/dev/null || true)"
+TEACHER_NAME="$(cat "${WORKDIR}/meta_teacher.txt" 2>/dev/null || true)"
+TEACHER_USER="$(cat "${WORKDIR}/meta_teacher_user.txt" 2>/dev/null || true)"
+SESSION_ID="$(cat "${WORKDIR}/meta_session.txt" 2>/dev/null || true)"
+GROUP_ID="$(cat "${WORKDIR}/meta_group_id.txt" 2>/dev/null || true)"
+MEETING_OPEN="$(cat "${WORKDIR}/meta_meeting_open.txt" 2>/dev/null || true)"
+
+portal_tg_lines() {
+  local lines=""
+  [[ -n "${TEACHER_NAME}" ]] && lines+=$'\n'"teacher=${TEACHER_NAME}"
+  [[ -n "${TEACHER_USER}" ]] && lines+=$'\n'"teacher_user=${TEACHER_USER}"
+  [[ -n "${GROUP_NAME}" ]] && lines+=$'\n'"group=${GROUP_NAME}"
+  [[ -n "${GROUP_ID}" ]] && lines+=$'\n'"group_id=${GROUP_ID}"
+  [[ -n "${SESSION_ID}" ]] && lines+=$'\n'"session_id=${SESSION_ID}"
+  [[ -n "${MEETING_OPEN}" ]] && lines+=$'\n'"meeting_open=${MEETING_OPEN}"
+  printf '%s' "${lines}"
+}
 
 for SRC in "${MP4S[@]}"; do
   FNAME="$(basename "${SRC}")"
@@ -293,7 +324,7 @@ for SRC in "${MP4S[@]}"; do
       PLAY_HINT="https://${CDN_HOST}/${VIDEO_ID}/play_720p.mp4"
     fi
 
-    log "OK (${HTTP_CODE}): library=${LIBRARY_ID} video=${VIDEO_ID} collection=${COLLECTION_ID:-root}"
+    log "OK (${HTTP_CODE}): library=${LIBRARY_ID} video=${VIDEO_ID} collection=${COLLECTION_ID:-root} teacher=${TEACHER_NAME:-?}"
     log "Embed: ${EMBED_URL}"
     [[ -n "${PLAY_HINT}" ]] && log "CDN hint: ${PLAY_HINT}"
 
@@ -306,9 +337,14 @@ for SRC in "${MP4S[@]}"; do
       --arg collection_id "${COLLECTION_ID}" \
       --arg embed_url "${EMBED_URL}" \
       --arg cdn_host "${CDN_HOST}" \
+      --arg teacher_name "${TEACHER_NAME}" \
+      --arg teacher_username "${TEACHER_USER}" \
+      --arg group_name "${GROUP_NAME}" \
+      --arg group_id "${GROUP_ID}" \
+      --arg session_id "${SESSION_ID}" \
       --arg uploaded_at "$(date -Iseconds)" \
       --argjson http_code "${HTTP_CODE}" \
-      '{local:$local,room:$room,video_id:$video_id,library_id:$library_id,collection_id:$collection_id,embed_url:$embed_url,cdn_hostname:$cdn_host,uploaded_at:$uploaded_at,http_code:$http_code}')" \
+      '{local:$local,room:$room,video_id:$video_id,library_id:$library_id,collection_id:$collection_id,embed_url:$embed_url,cdn_hostname:$cdn_host,teacher_name:$teacher_name,teacher_username:$teacher_username,group_name:$group_name,group_id:$group_id,session_id:$session_id,uploaded_at:$uploaded_at,http_code:$http_code}')" \
       >> "${META_OUT}"
 
     # Auto-create published lesson on ingress portal (title: DD.MM.YYYY-part-N)
@@ -318,7 +354,7 @@ for SRC in "${MP4S[@]}"; do
 room=${ROOM_NAME}
 video_id=${VIDEO_ID}
 library=${LIBRARY_ID}
-collection=${COLLECTION_ID:-root}"
+collection=${COLLECTION_ID:-root}$(portal_tg_lines)"
 
     rm -f "${SRC}"
     OK=1
@@ -328,7 +364,7 @@ collection=${COLLECTION_ID:-root}"
     tg "Jitsi Bunny upload FAIL
 room=${ROOM_NAME}
 video_id=${VIDEO_ID}
-http=${HTTP_CODE}"
+http=${HTTP_CODE}$(portal_tg_lines)"
     # Best-effort cleanup of empty video object
     curl -sS --connect-timeout 10 --max-time 30 -X DELETE \
       "${STREAM_API}/library/${LIBRARY_ID}/videos/${VIDEO_ID}" \
@@ -345,5 +381,5 @@ if [[ "${OK}" -eq 1 ]]; then
   exit 0
 fi
 
-tg "Jitsi Bunny upload FAIL (no OK files) room=${ROOM_NAME:-?} dir=${RECORDING_DIR}"
+tg "Jitsi Bunny upload FAIL (no OK files) room=${ROOM_NAME:-?} dir=${RECORDING_DIR}$(portal_tg_lines)"
 exit 1

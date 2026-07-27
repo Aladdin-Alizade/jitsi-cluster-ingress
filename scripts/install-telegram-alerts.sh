@@ -83,7 +83,7 @@ chmod 600 /opt/jitsi-cluster/telegram.env
 # cluster.env-ə telegram + recorder IP-ləri merge
 touch /opt/jitsi-cluster/cluster.env
 chmod 600 /opt/jitsi-cluster/cluster.env
-for key in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID TELEGRAM_TOPIC_ID TELEGRAM_NOTIFY JIBRI_PER_VM RECORDER_PRIVATE_IPS JVB_PRIVATE_IP DOMAIN; do
+for key in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID TELEGRAM_TOPIC_ID TELEGRAM_NOTIFY JIBRI_PER_VM RECORDER_PRIVATE_IPS JVB_PRIVATE_IP DOMAIN PORTAL_UPLOAD_META_URL PORTAL_UPLOAD_META_TOKEN; do
   sed -i "/^\${key}=/d" /opt/jitsi-cluster/cluster.env 2>/dev/null || true
 done
 cat >> /opt/jitsi-cluster/cluster.env <<EOF
@@ -95,6 +95,8 @@ TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
 TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
 TELEGRAM_TOPIC_ID=${TELEGRAM_TOPIC_ID}
 TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY}
+PORTAL_UPLOAD_META_URL=${PORTAL_UPLOAD_META_URL:-}
+PORTAL_UPLOAD_META_TOKEN=${PORTAL_UPLOAD_META_TOKEN:-}
 EOF
 
 cat > /etc/cron.d/jitsi-health-notify <<'CRON'

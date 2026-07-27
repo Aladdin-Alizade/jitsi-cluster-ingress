@@ -158,10 +158,21 @@ Yeni deploy-da token `.env`-dədirsə avtomatik quraşır.
 | `deploy.sh` | uğurlu / uğursuz |
 | Cloud Scheduler TG jobs | start/stop (və şənbə) pəncərəsi |
 | `schedule-all.sh` | manual start/stop |
-| meet-control cron `*/5` | xidmət/HTTPS/SSL/disk/CPU/JVB/Jibri; recording busy/idle |
-| `finalize_recording.sh` / `bunny-upload.sh` | finalize + Bunny OK/FAIL |
+| meet-control cron `*/5` | xidmət/HTTPS/SSL/disk/CPU/JVB/Jibri; recording busy/idle; **CRITICAL-də full diag + portal live meetings (müəllim/qrup)** |
+| `finalize_recording.sh` / `bunny-upload.sh` | finalize + Bunny OK/FAIL (**teacher / group / session**) |
 
-Health spam-i azdır: yalnız status dəyişəndə; CRITICAL ~60 dəq-də bir təkrarlana bilər. Log: `/var/log/jitsi/health-notify.log`.
+Health spam-i azdır: yalnız status dəyişəndə; CRITICAL ~60 dəq-də bir təkrarlana bilər.
+Log: `/var/log/jitsi/health-notify.log`. CRITICAL diaq: `/var/log/jitsi/health-diag/crit-*.log`.
+
+Portal (Ingress) API-lər (shared secret `PORTAL_UPLOAD_META_TOKEN`):
+
+| Endpoint | Məqsəd |
+|----------|--------|
+| `GET /portal/api/jitsi/room/{uuid}/upload-meta/` | room → collection + **teacher_name / group_name / meeting_open** |
+| `GET /portal/api/jitsi/live-meetings/` | hazırda açıq meetinglər (müəllim + qrup + room) |
+| `POST /portal/api/jitsi/room/{uuid}/recording-complete/` | Bunny upload sonrası lesson |
+
+**Qeyd:** Portal kim meeting açdığını bilir; recording busy isə Jibri-dədir. CRITICAL alert hər ikisini birləşdirir.
 
 **Test**
 

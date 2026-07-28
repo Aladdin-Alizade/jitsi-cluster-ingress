@@ -61,6 +61,7 @@ scp -q "${ssh_opts[@]}" \
   "${ROOT}/scripts/telegram-notify.sh" \
   "${ROOT}/scripts/health-notify.sh" \
   "${ROOT}/scripts/telegram-bot.sh" \
+  "${ROOT}/scripts/live-notify.sh" \
   "ubuntu@${CONTROL_PUBLIC_IP}:/tmp/"
 scp -q "${ssh_opts[@]}" "${SSH_PRIV}" "ubuntu@${CONTROL_PUBLIC_IP}:/tmp/deploy_key"
 
@@ -70,6 +71,7 @@ mkdir -p /opt/jitsi-cluster /var/lib/jitsi-cluster /var/log/jitsi
 install -m 755 /tmp/telegram-notify.sh /opt/jitsi-cluster/telegram-notify.sh
 install -m 755 /tmp/health-notify.sh /opt/jitsi-cluster/health-notify.sh
 install -m 755 /tmp/telegram-bot.sh /opt/jitsi-cluster/telegram-bot.sh
+install -m 755 /tmp/live-notify.sh /opt/jitsi-cluster/live-notify.sh
 mv /tmp/deploy_key /opt/jitsi-cluster/deploy_key
 chmod 600 /opt/jitsi-cluster/deploy_key
 chown root:root /opt/jitsi-cluster/deploy_key
@@ -105,9 +107,10 @@ cat > /etc/cron.d/jitsi-health-notify <<'CRON'
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 SHELL=/bin/bash
 */5 * * * * root /opt/jitsi-cluster/health-notify.sh >>/var/log/jitsi/health-notify.log 2>&1
+* * * * * root /opt/jitsi-cluster/live-notify.sh >>/var/log/jitsi/live-notify.log 2>&1
 CRON
 chmod 644 /etc/cron.d/jitsi-health-notify
-touch /var/log/jitsi/health-notify.log
+touch /var/log/jitsi/health-notify.log /var/log/jitsi/live-notify.log
 # köhnə shell-state faylı
 rm -f /var/lib/jitsi-cluster/health-state
 systemctl enable --now cron 2>/dev/null || true
@@ -138,7 +141,8 @@ systemctl enable --now jitsi-telegram-bot.service
 systemctl restart jitsi-telegram-bot.service
 
 /opt/jitsi-cluster/telegram-notify.sh "Jitsi Telegram alerts + bot installed on meet-control (${DOMAIN})
-Əmrlər: /status /live /recordings /help"
+Əmrlər: /status /live /recordings /help
+Meeting OPENED/CLOSED: avtomatik (~1 dəq)"
 REMOTE
 
 echo "[+] Recorder-lərə telegram-notify + env..."

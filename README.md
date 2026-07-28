@@ -160,11 +160,14 @@ Yeni deploy-da token `.env`-dədirsə avtomatik quraşır.
 | `schedule-all.sh` | manual start/stop |
 | meet-control cron `*/5` | xidmət/HTTPS/SSL/disk/CPU/JVB/Jibri; recording busy/idle; **CRITICAL-də full diag + portal live meetings (müəllim/qrup)** |
 | `jitsi-telegram-bot.service` | **interaktiv əmrlər:** `/status` `/live` `/recordings` `/help` |
+| meet-control cron `* * * * *` | **meeting OPENED/CLOSED** (portal live-meetings, ~1 dəq) |
 | `finalize_recording.sh` / `bunny-upload.sh` | finalize + Bunny OK/FAIL (**teacher / group / session**) |
 
 Health spam-i azdır: yalnız status dəyişəndə; CRITICAL ~60 dəq-də bir təkrarlana bilər.
 Log: `/var/log/jitsi/health-notify.log`. CRITICAL diaq: `/var/log/jitsi/health-diag/crit-*.log`.
-Bot log: `journalctl -u jitsi-telegram-bot -f`.
+Live meeting log: `/var/log/jitsi/live-notify.log`. Bot log: `journalctl -u jitsi-telegram-bot -f`.
+
+**Vacib:** yalnız meeting açmaq əvvəl Telegram göndərmirdi. İndi `live-notify` portalda room açılınca `meeting OPENED` yazır. **Recording** üçün ayrıca Meet-də Start recording lazımdır → `recording STARTED` (health, ~5 dəq).
 
 **Bot əmrləri** (yalnız `.env`-dəki `TELEGRAM_CHAT_ID` chatından):
 

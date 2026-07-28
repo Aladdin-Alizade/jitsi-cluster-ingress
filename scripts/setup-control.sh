@@ -306,6 +306,10 @@ if [[ -f "${SCRIPT_DIR}/telegram-bot.sh" ]]; then
   cp "${SCRIPT_DIR}/telegram-bot.sh" /opt/jitsi-cluster/telegram-bot.sh
   chmod 755 /opt/jitsi-cluster/telegram-bot.sh
 fi
+if [[ -f "${SCRIPT_DIR}/live-notify.sh" ]]; then
+  cp "${SCRIPT_DIR}/live-notify.sh" /opt/jitsi-cluster/live-notify.sh
+  chmod 755 /opt/jitsi-cluster/live-notify.sh
+fi
 cat > /opt/jitsi-cluster/telegram.env <<TGENV
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
 TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
@@ -316,15 +320,16 @@ chmod 600 /opt/jitsi-cluster/telegram.env
 
 if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
   mkdir -p /var/log/jitsi /var/lib/jitsi-cluster
-  touch /var/log/jitsi/health-notify.log
+  touch /var/log/jitsi/health-notify.log /var/log/jitsi/live-notify.log
   cat > /etc/cron.d/jitsi-health-notify <<'CRON'
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 SHELL=/bin/bash
 */5 * * * * root /opt/jitsi-cluster/health-notify.sh >>/var/log/jitsi/health-notify.log 2>&1
+* * * * * root /opt/jitsi-cluster/live-notify.sh >>/var/log/jitsi/live-notify.log 2>&1
 CRON
   chmod 644 /etc/cron.d/jitsi-health-notify
   systemctl enable --now cron 2>/dev/null || systemctl enable --now crond 2>/dev/null || true
-  log "Telegram health cron quraşdırıldı (*/5)"
+  log "Telegram health cron quraşdırıldı (*/5) + live-notify (* * * * *)"
 
   if [[ -x /opt/jitsi-cluster/telegram-bot.sh ]]; then
     cat > /etc/systemd/system/jitsi-telegram-bot.service <<'UNIT'

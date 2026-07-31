@@ -105,6 +105,10 @@ PREOF
       /modules_enabled = {/a\\        \"muc_max_occupants\";
     }" "${PROSODY_CFG}" || true
   fi
+  # muc_size → HTTP /room-size (portal probe + active-rooms.sh)
+  if ! grep -q '"muc_size"' "${PROSODY_CFG}"; then
+    sed -i '/modules_enabled = {/a\        "muc_size";' "${PROSODY_CFG}" || true
+  fi
 fi
 
 # Prosody 0.12 + yeni jitsi-meet-prosody: prosody.util.* → util.* (join/speakerstats break olmasın)
@@ -310,6 +314,10 @@ if [[ -f "${SCRIPT_DIR}/live-notify.sh" ]]; then
   cp "${SCRIPT_DIR}/live-notify.sh" /opt/jitsi-cluster/live-notify.sh
   chmod 755 /opt/jitsi-cluster/live-notify.sh
 fi
+if [[ -f "${SCRIPT_DIR}/active-rooms.sh" ]]; then
+  cp "${SCRIPT_DIR}/active-rooms.sh" /opt/jitsi-cluster/active-rooms.sh
+  chmod 755 /opt/jitsi-cluster/active-rooms.sh
+fi
 cat > /opt/jitsi-cluster/telegram.env <<TGENV
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
 TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
@@ -318,6 +326,20 @@ TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY:-true}
 TGENV
 chmod 600 /opt/jitsi-cluster/telegram.env
 
+# Prosody → portal live sync hər dəqiqə (Telegram olmasa belə)
+if [[ -n "${PORTAL_UPLOAD_META_URL:-}" && -n "${PORTAL_UPLOAD_META_TOKEN:-}" ]]; then
+  mkdir -p /var/log/jitsi /var/lib/jitsi-cluster
+  touch /var/log/jitsi/live-notify.log
+  cat > /etc/cron.d/jitsi-live-sync <<'CRON'
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+SHELL=/bin/bash
+* * * * * root /opt/jitsi-cluster/live-notify.sh >>/var/log/jitsi/live-notify.log 2>&1
+CRON
+  chmod 644 /etc/cron.d/jitsi-live-sync
+  systemctl enable --now cron 2>/dev/null || systemctl enable --now crond 2>/dev/null || true
+  log "Portal live-sync cron quraşdırıldı (* * * * *)"
+fi
+
 if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
   mkdir -p /var/log/jitsi /var/lib/jitsi-cluster
   touch /var/log/jitsi/health-notify.log /var/log/jitsi/live-notify.log
@@ -325,11 +347,10 @@ if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 SHELL=/bin/bash
 */5 * * * * root /opt/jitsi-cluster/health-notify.sh >>/var/log/jitsi/health-notify.log 2>&1
-* * * * * root /opt/jitsi-cluster/live-notify.sh >>/var/log/jitsi/live-notify.log 2>&1
 CRON
   chmod 644 /etc/cron.d/jitsi-health-notify
   systemctl enable --now cron 2>/dev/null || systemctl enable --now crond 2>/dev/null || true
-  log "Telegram health cron quraşdırıldı (*/5) + live-notify (* * * * *)"
+  log "Telegram health cron quraşdırıldı (*/5)"
 
   if [[ -x /opt/jitsi-cluster/telegram-bot.sh ]]; then
     cat > /etc/systemd/system/jitsi-telegram-bot.service <<'UNIT'

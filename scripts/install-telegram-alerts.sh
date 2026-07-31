@@ -62,6 +62,7 @@ scp -q "${ssh_opts[@]}" \
   "${ROOT}/scripts/health-notify.sh" \
   "${ROOT}/scripts/telegram-bot.sh" \
   "${ROOT}/scripts/live-notify.sh" \
+  "${ROOT}/scripts/active-rooms.sh" \
   "ubuntu@${CONTROL_PUBLIC_IP}:/tmp/"
 scp -q "${ssh_opts[@]}" "${SSH_PRIV}" "ubuntu@${CONTROL_PUBLIC_IP}:/tmp/deploy_key"
 
@@ -72,6 +73,7 @@ install -m 755 /tmp/telegram-notify.sh /opt/jitsi-cluster/telegram-notify.sh
 install -m 755 /tmp/health-notify.sh /opt/jitsi-cluster/health-notify.sh
 install -m 755 /tmp/telegram-bot.sh /opt/jitsi-cluster/telegram-bot.sh
 install -m 755 /tmp/live-notify.sh /opt/jitsi-cluster/live-notify.sh
+install -m 755 /tmp/active-rooms.sh /opt/jitsi-cluster/active-rooms.sh
 mv /tmp/deploy_key /opt/jitsi-cluster/deploy_key
 chmod 600 /opt/jitsi-cluster/deploy_key
 chown root:root /opt/jitsi-cluster/deploy_key

@@ -160,8 +160,23 @@ Yeni deploy-da token `.env`-dədirsə avtomatik quraşır.
 | `schedule-all.sh` | manual start/stop |
 | meet-control cron `*/5` | xidmət/HTTPS/SSL/disk/CPU/JVB/Jibri; recording busy/idle; **CRITICAL-də full diag + portal live meetings (müəllim/qrup)** |
 | `jitsi-telegram-bot.service` | **interaktiv əmrlər:** `/status` `/live` `/recordings` `/help` |
-| meet-control cron `* * * * *` | **meeting OPENED/CLOSED** (portal live-meetings, ~1 dəq) |
+| meet-control cron `* * * * *` | **Prosody → portal sync-live** (stale open flags bağlanır) + Telegram OPENED/CLOSED |
 | `finalize_recording.sh` / `bunny-upload.sh` | finalize + Bunny OK/FAIL (**teacher / group / session**) |
+
+**Live sync (dəqiq "indi kim live-dır")**
+
+Portal artıq yalnız DB flag-ə baxmır. meet-control hər dəqiqə:
+
+1. `active-rooms.sh` — Prosody MUC-də real room-ları oxuyur  
+2. `POST /portal/api/jitsi/sync-live/` — portalda açıq qalıb, Prosody-də olmayan room-ları bağlayır  
+3. Prosody down olanda bütün portal "live" flag-ləri bağlanır  
+
+Mövcud cluster-ə (redeploy olmadan):
+
+```bash
+# .env-də PORTAL_UPLOAD_META_URL + PORTAL_UPLOAD_META_TOKEN
+./scripts/install-live-sync.sh
+```
 
 Health spam-i azdır: yalnız status dəyişəndə; CRITICAL ~60 dəq-də bir təkrarlana bilər.
 Log: `/var/log/jitsi/health-notify.log`. CRITICAL diaq: `/var/log/jitsi/health-diag/crit-*.log`.
@@ -183,10 +198,11 @@ Portal (Ingress) API-lər (shared secret `PORTAL_UPLOAD_META_TOKEN`):
 | Endpoint | Məqsəd |
 |----------|--------|
 | `GET /portal/api/jitsi/room/{uuid}/upload-meta/` | room → collection + **teacher_name / group_name / meeting_open** |
-| `GET /portal/api/jitsi/live-meetings/` | hazırda açıq meetinglər (müəllim + qrup + room) |
-| `POST /portal/api/jitsi/room/{uuid}/recording-complete/` | Bunny upload sonrası lesson |
+| `GET /portal/api/jitsi/live-meetings/` | hazırda açıq meetinglər (müəllim + qrup + room) — sync-dən sonra |
+| `POST /portal/api/jitsi/sync-live/` | Prosody active rooms → stale portal live flags bağla |
+| `POST /portal/api/jitsi/room/{uuid}/recording-complete/` | Bunny upload sonrası published GroupLesson |
 
-**Qeyd:** Portal kim meeting açdığını bilir; recording busy isə Jibri-dədir. CRITICAL alert hər ikisini birləşdirir.
+**Qeyd:** Portal kim meeting açdığını bilir; recording busy isə Jibri-dədir. CRITICAL alert hər ikisini birləşdirir. Live truth isə Prosody MUC-dadır (`active-rooms.sh` → `sync-live`).
 
 **Test**
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# meet-control cron (hər dəqiqə): portal live meetings → Telegram OPENED/CLOSED
+# meet-control cron (hər dəqiqə):
+#  1) Prosody active rooms → portal /api/jitsi/sync-live/ (stale open flags bağlanır)
+#  2) portal live meetings → Telegram OPENED/CLOSED
 # Yalnız PORTAL_UPLOAD_META_* olanda işləyir.
 
 set +e
@@ -8,6 +10,7 @@ set +u
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
 
 NOTIFY_BIN="${NOTIFY_BIN:-/opt/jitsi-cluster/telegram-notify.sh}"
+ACTIVE_ROOMS_BIN="${ACTIVE_ROOMS_BIN:-/opt/jitsi-cluster/active-rooms.sh}"
 STATE_DIR="${STATE_DIR:-/var/lib/jitsi-cluster}"
 STATE_FILE="${STATE_DIR}/live-notify-state.json"
 CLUSTER_ENV="${CLUSTER_ENV:-/opt/jitsi-cluster/cluster.env}"
@@ -45,6 +48,26 @@ if ! command -v jq >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
 fi
 
 base="${PORTAL_UPLOAD_META_URL%/}"
+
+# ---- 1) Prosody → portal sync (source of truth for "live") ---------------- #
+if [[ -x "${ACTIVE_ROOMS_BIN}" ]]; then
+  rooms_json="$("${ACTIVE_ROOMS_BIN}" 2>/dev/null)" || rooms_json=""
+  if echo "${rooms_json}" | jq -e 'has("prosody_ok")' >/dev/null 2>&1; then
+    sync_body="$(echo "${rooms_json}" | jq -c '{
+      prosody_ok: (.prosody_ok == true),
+      active_rooms: (.rooms // [])
+    }')"
+    curl -sS --connect-timeout 8 --max-time 20 \
+      -X POST \
+      -H "Authorization: Bearer ${PORTAL_UPLOAD_META_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -H "Accept: application/json" \
+      -d "${sync_body}" \
+      "${base}/portal/api/jitsi/sync-live/" >/dev/null 2>&1 || true
+  fi
+fi
+
+# ---- 2) Telegram OPENED/CLOSED from reconciled portal state --------------- #
 url="${base}/portal/api/jitsi/live-meetings/"
 resp="$(curl -sS --connect-timeout 8 --max-time 20 \
   -H "Authorization: Bearer ${PORTAL_UPLOAD_META_TOKEN}" \

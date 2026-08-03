@@ -167,7 +167,7 @@ Yeni deploy-da token `.env`-dədirsə avtomatik quraşır.
 
 Portal artıq yalnız DB flag-ə baxmır. meet-control hər dəqiqə:
 
-1. `active-rooms.sh` — Prosody MUC-də real room-ları oxuyur  
+1. `active-rooms.sh` — Prosody MUC-də real room-ları oxuyur (human occupants; yalnız Jibri recorder qalıbsa room inactive sayılır və busy Jibri `stopService` çağırılır)  
 2. `POST /portal/api/jitsi/sync-live/` — portalda açıq qalıb, Prosody-də olmayan room-ları bağlayır  
 3. Prosody down olanda bütün portal "live" flag-ləri bağlanır  
 
@@ -177,6 +177,34 @@ Mövcud cluster-ə (redeploy olmadan):
 # .env-də PORTAL_UPLOAD_META_URL + PORTAL_UPLOAD_META_TOKEN
 ./scripts/install-live-sync.sh
 ```
+
+**Moderator leave = end for everyone**
+
+Portal embed müəllim Hang up / Meetingi bitir / tab X-də `stopRecording` + `endConference` + portal end POST edir. Bunun üçün meet-control Prosody-də `end_conference` komponenti lazımdır (`setup-control.sh` avtomatik yazır).
+
+Mövcud control VM-ə (redeploy olmadan):
+
+```bash
+DOMAIN="$(grep ^DOMAIN= /opt/jitsi-cluster/cluster.env | cut -d= -f2)"
+PROSODY_CFG="/etc/prosody/conf.avail/${DOMAIN}.cfg.lua"
+grep -q "endconference.${DOMAIN}" "${PROSODY_CFG}" || cat >> "${PROSODY_CFG}" <<EOF
+
+Component "endconference.${DOMAIN}" "end_conference"
+    muc_component = "conference.${DOMAIN}"
+EOF
+openssl req -new -x509 -days 3650 -nodes \
+  -out "/etc/prosody/certs/endconference.${DOMAIN}.crt" \
+  -keyout "/etc/prosody/certs/endconference.${DOMAIN}.key" \
+  -subj "/CN=endconference.${DOMAIN}" >/dev/null 2>&1 || true
+chown root:prosody /etc/prosody/certs/endconference.${DOMAIN}.* 2>/dev/null || true
+chmod 640 /etc/prosody/certs/endconference.${DOMAIN}.key 2>/dev/null || true
+systemctl reload prosody || systemctl restart prosody
+# active-rooms + live-notify yenilə:
+# gcloud compute scp scripts/active-rooms.sh scripts/live-notify.sh meet-control:/tmp/
+# sudo install -m 755 /tmp/active-rooms.sh /tmp/live-notify.sh /opt/jitsi-cluster/
+```
+
+`enable-auto-owner` JWT olmadan **true** qalır (müəllim first-joiner moderator + recording). Tələbəyə ownership keçməsi portal `endConference` ilə bloklanır.
 
 Health spam-i azdır: yalnız status dəyişəndə; CRITICAL ~60 dəq-də bir təkrarlana bilər.
 Log: `/var/log/jitsi/health-notify.log`. CRITICAL diaq: `/var/log/jitsi/health-diag/crit-*.log`.

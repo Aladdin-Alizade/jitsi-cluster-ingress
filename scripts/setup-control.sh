@@ -109,6 +109,16 @@ PREOF
   if ! grep -q '"muc_size"' "${PROSODY_CFG}"; then
     sed -i '/modules_enabled = {/a\        "muc_size";' "${PROSODY_CFG}" || true
   fi
+
+  # end_conference → External API endConference (müəllim leave = hamını kick)
+  if ! grep -q "Component \"endconference.${DOMAIN}\"" "${PROSODY_CFG}"; then
+    cat >> "${PROSODY_CFG}" <<ENDCONF
+
+-- Portal moderator leave: end conference for everyone
+Component "endconference.${DOMAIN}" "end_conference"
+    muc_component = "conference.${DOMAIN}"
+ENDCONF
+  fi
 fi
 
 # Prosody 0.12 + yeni jitsi-meet-prosody: prosody.util.* → util.* (join/speakerstats break olmasın)
@@ -159,6 +169,8 @@ jicofo {
   conference: {
     max-participants: 15
     max-bridge-participants: 40
+    # true: teacher (first joiner) gets moderator so recording/endConference work
+    # without JWT. Student succession is blocked by portal endConference on leave.
     enable-auto-owner: true
     strip-simulcast: false
   }
@@ -257,7 +269,7 @@ if [[ -f "/etc/jitsi/meet/${DOMAIN}.crt" ]]; then
   cp -f "/etc/jitsi/meet/${DOMAIN}.crt" "/etc/prosody/certs/${DOMAIN}.crt"
   cp -f "/etc/jitsi/meet/${DOMAIN}.key" "/etc/prosody/certs/${DOMAIN}.key"
 fi
-for h in "auth.${DOMAIN}" "internal.auth.${DOMAIN}" "conference.${DOMAIN}" "recorder.${DOMAIN}" "guest.${DOMAIN}" "focus.${DOMAIN}"; do
+for h in "auth.${DOMAIN}" "internal.auth.${DOMAIN}" "conference.${DOMAIN}" "recorder.${DOMAIN}" "guest.${DOMAIN}" "focus.${DOMAIN}" "endconference.${DOMAIN}"; do
   openssl req -new -x509 -days 3650 -nodes \
     -out "/etc/prosody/certs/${h}.crt" \
     -keyout "/etc/prosody/certs/${h}.key" \

@@ -81,3 +81,7 @@ config.fileRecordingsEnabled = true;
 config.fileRecordingsServiceEnabled = false;
 config.fileRecordingsServiceSharingEnabled = false;
 config.hiddenDomain = 'recorder.__DOMAIN__';
+
+// endConference (portal teacher leave) requires Prosody:
+//   Component "endconference.__DOMAIN__" "end_conference"
+// See setup-control.sh — applied on deploy / repair.

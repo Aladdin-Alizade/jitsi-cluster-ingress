@@ -158,24 +158,20 @@ Yeni deploy-da token `.env`-dədirsə avtomatik quraşır.
 | `deploy.sh` | uğurlu / uğursuz |
 | Cloud Scheduler TG jobs | start/stop (və şənbə) pəncərəsi |
 | `schedule-all.sh` | manual start/stop |
-| meet-control cron `*/5` | xidmət/HTTPS/SSL/disk/CPU/JVB/Jibri; recording busy/idle; **CRITICAL-də full diag + portal live meetings (müəllim/qrup)** |
+| meet-control cron `*/5` | xidmət/HTTPS/SSL/disk/CPU/JVB/Jibri; recording busy/idle; **CRITICAL-də full diag + Prosody rooms (müəllim/qrup via upload-meta)** |
 | `jitsi-telegram-bot.service` | **interaktiv əmrlər:** `/status` `/live` `/recordings` `/help` |
-| meet-control cron `* * * * *` | **Prosody → portal sync-live** (stale open flags bağlanır) + Telegram OPENED/CLOSED |
+| meet-control cron `* * * * *` | **Prosody → Telegram Meeting başladı/bitdi** (yalnız otaq açılıb/bağlananda bir dəfə) |
 | `finalize_recording.sh` / `bunny-upload.sh` | finalize + Bunny OK/FAIL (**teacher / group / session**) |
 
-**Live sync (dəqiq "indi kim live-dır")**
+**Meeting Telegram (bir dəfə / lifecycle)**
 
-Portal artıq yalnız DB flag-ə baxmır. meet-control hər dəqiqə:
-
-1. `active-rooms.sh` — Prosody MUC-də real room-ları oxuyur (human occupants; yalnız Jibri recorder qalıbsa room inactive sayılır və busy Jibri `stopService` çağırılır)  
-2. `POST /portal/api/jitsi/sync-live/` — portalda açıq qalıb, Prosody-də olmayan room-ları bağlayır  
-3. Prosody down olanda bütün portal "live" flag-ləri bağlanır  
+`live-notify.sh` hər dəqiqə Prosody-ni oxuyur, amma Telegram yalnız state-file diff-də yeni və ya itən otaq olanda gedir. Portal sync-live / live-meetings yoxdur — görüşü yalnız müəllim bağlayır.
 
 Mövcud cluster-ə (redeploy olmadan):
 
 ```bash
 # .env-də PORTAL_UPLOAD_META_URL + PORTAL_UPLOAD_META_TOKEN
-./scripts/install-live-sync.sh
+./scripts/install-telegram-alerts.sh
 ```
 
 **Moderator leave = end for everyone**
@@ -212,7 +208,7 @@ Live meeting log: `/var/log/jitsi/live-notify.log`. Bot log: `journalctl -u jits
 
 **Vacib:** Telegram lifecycle mesajları yalnız action olanda gedir (hər dəqiqə spam yoxdur):
 
-- `Meeting başladıldı` / `Meeting bitdi` — `live-notify` (Prosody↔portal diff)
+- `Meeting başladıldı` / `Meeting bitdi` — `live-notify` (Prosody room diff, bir dəfə)
 - `Record basladildi` / `Record bitdi` — `health-notify` (Jibri busy↔idle)
 - `Record bunny e yuklendi` / `Record jitsi serverden silindi` — `bunny-upload.sh` (upload OK + lokal silmə)
 
@@ -230,7 +226,7 @@ Texniki diag CRITICAL-də `/var/log/jitsi/health-diag/` faylında qalır; Telegr
 | Əmr | Cavab |
 |-----|--------|
 | `/status` | nginx/prosody/jicofo, HTTPS, JVB, recorder SSH, Jibri, busy slotlar |
-| `/live` | portal açıq meetinglər (müəllim, qrup, room) |
+| `/live` | Prosody aktiv otaqlar (+ upload-meta ilə müəllim/qrup) |
 | `/recordings` | Jibri busy/idle + aktiv recording faylları + portal kontekst |
 | `/help` | əmr siyahısı |
 
@@ -239,11 +235,9 @@ Portal (Ingress) API-lər (shared secret `PORTAL_UPLOAD_META_TOKEN`):
 | Endpoint | Məqsəd |
 |----------|--------|
 | `GET /portal/api/jitsi/room/{uuid}/upload-meta/` | room → collection + **teacher_name / group_name / meeting_open** |
-| `GET /portal/api/jitsi/live-meetings/` | hazırda açıq meetinglər (müəllim + qrup + room) — sync-dən sonra |
-| `POST /portal/api/jitsi/sync-live/` | Prosody active rooms → stale portal live flags bağla |
 | `POST /portal/api/jitsi/room/{uuid}/recording-complete/` | Bunny upload sonrası published GroupLesson |
 
-**Qeyd:** Portal kim meeting açdığını bilir; recording busy isə Jibri-dədir. CRITICAL alert hər ikisini birləşdirir. Live truth isə Prosody MUC-dadır (`active-rooms.sh` → `sync-live`).
+**Qeyd:** Recording busy Jibri-dədir. Meeting Telegram Prosody MUC diff-indən gəlir (`active-rooms.sh` → `live-notify`). Portal open flag-ləri müəllim Start/End ilə idarə olunur.
 
 **Test**
 

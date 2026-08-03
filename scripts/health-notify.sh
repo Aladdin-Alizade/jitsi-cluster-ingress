@@ -132,36 +132,30 @@ humanize_health_issue() {
   esac
 }
 
-# First open portal meeting → teacher/email/group for exception context
+# First Prosody active room → teacher/email/group via upload-meta
 portal_context_for_alerts() {
-  local base token url resp
-  base="${PORTAL_UPLOAD_META_URL:-}"
-  token="${PORTAL_UPLOAD_META_TOKEN:-}"
-  if [[ -z "${base}" || -z "${token}" ]] || ! command -v jq >/dev/null 2>&1; then
+  local rooms_bin rooms_json room meta
+  rooms_bin="${ACTIVE_ROOMS_BIN:-/opt/jitsi-cluster/active-rooms.sh}"
+  if [[ ! -x "${rooms_bin}" ]] || ! command -v jq >/dev/null 2>&1; then
     echo '{"teacher_name":"","teacher_email":"","group_name":""}'
     return 0
   fi
-  base="${base%/}"
-  url="${base}/portal/api/jitsi/live-meetings/"
-  resp="$(curl -sS --connect-timeout 8 --max-time 20 \
-    -H "Authorization: Bearer ${token}" \
-    -H "Accept: application/json" \
-    "${url}" 2>/dev/null)" || {
+  rooms_json="$("${rooms_bin}" 2>/dev/null)" || rooms_json=""
+  if ! echo "${rooms_json}" | jq -e '.prosody_ok == true' >/dev/null 2>&1; then
     echo '{"teacher_name":"","teacher_email":"","group_name":""}'
     return 0
-  }
-  echo "${resp}" | jq -c '
-    (.meetings // []) as $m |
-    if ($m|length) == 0 then
-      {teacher_name:"", teacher_email:"", group_name:""}
-    else
-      {
-        teacher_name: ($m[0].teacher_name // ""),
-        teacher_email: ($m[0].teacher_email // ""),
-        group_name: ($m[0].group_name // "")
-      }
-    end
-  ' 2>/dev/null || echo '{"teacher_name":"","teacher_email":"","group_name":""}'
+  fi
+  room="$(echo "${rooms_json}" | jq -r '.rooms[0]?.room // empty' 2>/dev/null || true)"
+  if [[ -z "${room}" ]]; then
+    echo '{"teacher_name":"","teacher_email":"","group_name":""}'
+    return 0
+  fi
+  meta="$(fetch_portal_room_meta "${room}")"
+  echo "${meta}" | jq -c '{
+    teacher_name: (.teacher_name // ""),
+    teacher_email: (.teacher_email // ""),
+    group_name: (.group_name // "")
+  }' 2>/dev/null || echo '{"teacher_name":"","teacher_email":"","group_name":""}'
 }
 
 # slot key "ip:slotN" → room UUID from recorder metadata (best-effort)
@@ -394,37 +388,31 @@ REMOTE
 }
 
 fetch_portal_live() {
-  local base token url resp
-  base="${PORTAL_UPLOAD_META_URL:-}"
-  token="${PORTAL_UPLOAD_META_TOKEN:-}"
-  if [[ -z "${base}" || -z "${token}" ]]; then
-    echo "(portal meta URL/token yoxdur — teacher/group bilinmir)"
+  local rooms_bin rooms_json count room meta line
+  rooms_bin="${ACTIVE_ROOMS_BIN:-/opt/jitsi-cluster/active-rooms.sh}"
+  if [[ ! -x "${rooms_bin}" ]] || ! command -v jq >/dev/null 2>&1; then
+    echo "(active-rooms yoxdur — Prosody live bilinmir)"
     return 0
   fi
-  base="${base%/}"
-  url="${base}/portal/api/jitsi/live-meetings/"
-  resp="$(curl -sS --connect-timeout 8 --max-time 20 \
-    -H "Authorization: Bearer ${token}" \
-    -H "Accept: application/json" \
-    "${url}" 2>/dev/null)" || {
-    echo "(portal live-meetings curl fail)"
-    return 0
-  }
-  if ! echo "${resp}" | jq -e '.ok == true' >/dev/null 2>&1; then
-    echo "(portal live-meetings: ${resp:0:200})"
+  rooms_json="$("${rooms_bin}" 2>/dev/null)" || rooms_json=""
+  if ! echo "${rooms_json}" | jq -e '.prosody_ok == true' >/dev/null 2>&1; then
+    echo "(Prosody active-rooms fail)"
     return 0
   fi
-  local count
-  count="$(echo "${resp}" | jq -r '.count // 0')"
+  count="$(echo "${rooms_json}" | jq -r '.count // (.rooms|length) // 0')"
   if [[ "${count}" == "0" ]]; then
-    echo "portal live meetings: none open"
+    echo "Prosody live rooms: none"
     return 0
   fi
-  echo "portal live meetings (${count}):"
-  echo "${resp}" | jq -r '
-    .meetings[]? |
-    "  teacher=\(.teacher_name // "?") (@\(.teacher_username // "?")) group=\(.group_name // "?") room=\(.room // "?") started=\(.started_at // "?")"
-  ' 2>/dev/null || echo "${resp:0:500}"
+  echo "Prosody live rooms (${count}):"
+  while IFS= read -r room; do
+    [[ -z "${room}" ]] && continue
+    meta="$(fetch_portal_room_meta "${room}")"
+    line="$(echo "${meta}" | jq -r --arg r "${room}" '
+      "  teacher=\(.teacher_name // "?") group=\(.group_name // "?") room=\($r)"
+    ' 2>/dev/null || echo "  room=${room}")"
+    echo "${line}"
+  done < <(echo "${rooms_json}" | jq -r '.rooms[]?.room // empty' 2>/dev/null)
 }
 
 build_critical_diag() {

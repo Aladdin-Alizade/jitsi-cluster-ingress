@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # meet-control cron (hər dəqiqə):
-#  1) Prosody active rooms → portal /api/jitsi/sync-live/ (stale open flags bağlanır)
-#  2) portal live meetings → Telegram yalnız Meeting başladı / Meeting bitdi (diff)
-# Yalnız PORTAL_UPLOAD_META_* olanda işləyir.
+#  Prosody active rooms → Telegram yalnız Meeting başladıldı / Meeting bitdi
+#  State-file diff: hər otaq üçün lifecycle-də bir dəfə (spam yoxdur).
+#  Portal sync-live / live-meetings çağırılmır.
 # Exception / health / CRITICAL mesajlara toxunmur.
 
 set +e
@@ -66,64 +66,66 @@ fmt_action_msg() {
     "${title}" "${vaxt}" "${teacher}" "${email}" "${group}" "${room}"
 }
 
-if [[ -z "${PORTAL_UPLOAD_META_URL}" || -z "${PORTAL_UPLOAD_META_TOKEN}" ]]; then
-  exit 0
-fi
+fetch_room_meta() {
+  local room="$1" base token url resp
+  base="${PORTAL_UPLOAD_META_URL:-}"
+  token="${PORTAL_UPLOAD_META_TOKEN:-}"
+  if [[ -z "${base}" || -z "${token}" || -z "${room}" ]]; then
+    echo '{"teacher_name":"","teacher_email":"","group_name":""}'
+    return 0
+  fi
+  base="${base%/}"
+  url="${base}/portal/api/jitsi/room/${room}/upload-meta/"
+  resp="$(curl -sS --connect-timeout 8 --max-time 20 \
+    -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/json" \
+    "${url}" 2>/dev/null)" || {
+    echo '{"teacher_name":"","teacher_email":"","group_name":""}'
+    return 0
+  }
+  echo "${resp}" | jq -c '{
+    teacher_name: (.teacher_name // ""),
+    teacher_email: (.teacher_email // ""),
+    group_name: (.group_name // "")
+  }' 2>/dev/null || echo '{"teacher_name":"","teacher_email":"","group_name":""}'
+}
+
 if ! command -v jq >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
   exit 0
 fi
-
-base="${PORTAL_UPLOAD_META_URL%/}"
-
-# ---- 1) Prosody → portal sync (source of truth for "live") ---------------- #
-if [[ -x "${ACTIVE_ROOMS_BIN}" ]]; then
-  rooms_json="$("${ACTIVE_ROOMS_BIN}" 2>/dev/null)" || rooms_json=""
-  if echo "${rooms_json}" | jq -e 'has("prosody_ok")' >/dev/null 2>&1; then
-    sync_body="$(echo "${rooms_json}" | jq -c '{
-      prosody_ok: (.prosody_ok == true),
-      active_rooms: (.rooms // [])
-    }')"
-    curl -sS --connect-timeout 8 --max-time 20 \
-      -X POST \
-      -H "Authorization: Bearer ${PORTAL_UPLOAD_META_TOKEN}" \
-      -H "Content-Type: application/json" \
-      -H "Accept: application/json" \
-      -d "${sync_body}" \
-      "${base}/portal/api/jitsi/sync-live/" >/dev/null 2>&1 || true
-  fi
+if [[ ! -x "${ACTIVE_ROOMS_BIN}" ]]; then
+  exit 0
 fi
 
-# ---- 2) Telegram Meeting başladı / bitdi (yalnız diff) -------------------- #
-url="${base}/portal/api/jitsi/live-meetings/"
-resp="$(curl -sS --connect-timeout 8 --max-time 20 \
-  -H "Authorization: Bearer ${PORTAL_UPLOAD_META_TOKEN}" \
-  -H "Accept: application/json" \
-  "${url}" 2>/dev/null)" || exit 0
-
-if ! echo "${resp}" | jq -e '.ok == true' >/dev/null 2>&1; then
+rooms_json="$("${ACTIVE_ROOMS_BIN}" 2>/dev/null)" || rooms_json=""
+if ! echo "${rooms_json}" | jq -e '.prosody_ok == true' >/dev/null 2>&1; then
+  # Prosody down — do not invent closes/opens; keep previous state.
   exit 0
 fi
 
 # room → {teacher_name,teacher_email,group_name,started_at}
-CUR_MAP="$(echo "${resp}" | jq -c '
-  reduce (.meetings[]? | select((.room // "") != "")) as $m ({};
+CUR_MAP='{}'
+while IFS= read -r room; do
+  [[ -z "${room}" ]] && continue
+  meta="$(fetch_room_meta "${room}")"
+  started="$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')"
+  CUR_MAP="$(jq -c --arg r "${room}" --argjson m "${meta}" --arg s "${started}" '
     . + {
-      ($m.room): {
+      ($r): {
         teacher_name: ($m.teacher_name // ""),
         teacher_email: ($m.teacher_email // ""),
         group_name: ($m.group_name // ""),
-        started_at: ($m.started_at // "")
+        started_at: $s
       }
     }
-  )
-' 2>/dev/null || echo '{}')"
+  ' <<<"${CUR_MAP}")"
+done < <(echo "${rooms_json}" | jq -r '.rooms[]?.room // empty' 2>/dev/null)
 
 CUR_ROOMS="$(echo "${CUR_MAP}" | jq -r 'keys | sort | join(",")' 2>/dev/null || true)"
 PREV_MAP='{}'
 PREV_ROOMS=""
 if [[ -f "${STATE_FILE}" ]]; then
   PREV_MAP="$(jq -c '.meetings // {}' "${STATE_FILE}" 2>/dev/null || echo '{}')"
-  # Backward compat: older state only had PREV_ROOMS
   if [[ "${PREV_MAP}" == "{}" || "${PREV_MAP}" == "null" ]]; then
     PREV_ROOMS="$(jq -r '.PREV_ROOMS // empty' "${STATE_FILE}" 2>/dev/null || true)"
     if [[ -n "${PREV_ROOMS}" ]]; then
@@ -137,6 +139,34 @@ if [[ -f "${STATE_FILE}" ]]; then
   PREV_ROOMS="$(echo "${PREV_MAP}" | jq -r 'keys | sort | join(",")' 2>/dev/null || true)"
 fi
 
+# Keep prior started_at / meta when room still open (avoid rewriting timestamps).
+CUR_MAP="$(jq -c --argjson prev "${PREV_MAP}" --argjson cur "${CUR_MAP}" '
+  reduce ($cur | keys[]) as $r ({};
+    . + {
+      ($r): (
+        if ($prev[$r] != null) then
+          {
+            teacher_name: (
+              if (($cur[$r].teacher_name // "") != "") then $cur[$r].teacher_name
+              else ($prev[$r].teacher_name // "") end
+            ),
+            teacher_email: (
+              if (($cur[$r].teacher_email // "") != "") then $cur[$r].teacher_email
+              else ($prev[$r].teacher_email // "") end
+            ),
+            group_name: (
+              if (($cur[$r].group_name // "") != "") then $cur[$r].group_name
+              else ($prev[$r].group_name // "") end
+            ),
+            started_at: ($prev[$r].started_at // $cur[$r].started_at // "")
+          }
+        else $cur[$r]
+        end
+      )
+    }
+  )
+' 2>/dev/null || echo "${CUR_MAP}")"
+
 # İlk run — baseline, spam olmasın
 if [[ ! -f "${STATE_FILE}" ]]; then
   jq -nc --argjson m "${CUR_MAP}" '{meetings:$m}' >"${STATE_FILE}" 2>/dev/null || true
@@ -147,7 +177,7 @@ fi
 IFS=',' read -r -a prev_a <<< "${PREV_ROOMS}"
 IFS=',' read -r -a cur_a <<< "${CUR_ROOMS}"
 
-# Meeting başladı
+# Meeting başladı — yalnız yeni otaq
 for room in "${cur_a[@]}"; do
   [[ -z "${room}" ]] && continue
   found=0
@@ -161,7 +191,7 @@ for room in "${cur_a[@]}"; do
   fi
 done
 
-# Meeting bitdi (context previous state-dən)
+# Meeting bitdi — yalnız itən otaq
 for room in "${prev_a[@]}"; do
   [[ -z "${room}" ]] && continue
   found=0
@@ -170,8 +200,6 @@ for room in "${prev_a[@]}"; do
     teacher="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_name // empty')"
     email="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_email // empty')"
     group="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].group_name // empty')"
-    started="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].started_at // empty')"
-    # Bitmə vaxtı = indi; started_at yalnız kontekst üçündür
     tg "$(fmt_action_msg "Meeting bitdi:" "${teacher}" "${email}" "${group}" "${room}" "")"
   fi
 done

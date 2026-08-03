@@ -173,46 +173,43 @@ time=$(date -Iseconds)"
 }
 
 cmd_live() {
-  local base token url resp
-  base="${PORTAL_UPLOAD_META_URL:-}"
-  token="${PORTAL_UPLOAD_META_TOKEN:-}"
-  if [[ -z "${base}" || -z "${token}" ]]; then
+  local rooms_bin rooms_json count room meta line
+  rooms_bin="${ACTIVE_ROOMS_BIN:-/opt/jitsi-cluster/active-rooms.sh}"
+  if [[ ! -x "${rooms_bin}" ]] || ! command -v jq >/dev/null 2>&1; then
     echo "Jitsi /live
-portal meta URL/token yoxdur (PORTAL_UPLOAD_META_*).
-Müəllim/qrup göstərmək üçün cluster.env-ə əlavə et."
+active-rooms.sh yoxdur (Prosody).
+meet-control-da /opt/jitsi-cluster/active-rooms.sh quraşdır."
     return 0
   fi
-  base="${base%/}"
-  url="${base}/portal/api/jitsi/live-meetings/"
-  resp="$(curl -sS --connect-timeout 8 --max-time 20 \
-    -H "Authorization: Bearer ${token}" \
-    -H "Accept: application/json" \
-    "${url}" 2>/dev/null)" || {
-    echo "Jitsi /live
-portal live-meetings curl fail"
-    return 0
-  }
-  if ! echo "${resp}" | jq -e '.ok == true' >/dev/null 2>&1; then
-    echo "Jitsi /live
-portal error: ${resp:0:300}"
-    return 0
-  fi
-  local count
-  count="$(echo "${resp}" | jq -r '.count // 0')"
-  if [[ "${count}" == "0" ]]; then
+  rooms_json="$("${rooms_bin}" 2>/dev/null)" || rooms_json=""
+  if ! echo "${rooms_json}" | jq -e '.prosody_ok == true' >/dev/null 2>&1; then
     echo "Jitsi /live
 domain=${DOMAIN:-?}
-open meetings: 0"
+Prosody active-rooms fail"
     return 0
   fi
+  count="$(echo "${rooms_json}" | jq -r '.count // (.rooms|length) // 0')"
   {
     echo "Jitsi /live"
     echo "domain=${DOMAIN:-?}"
     echo "open meetings: ${count}"
-    echo "${resp}" | jq -r '
-      .meetings[]? |
-      "— teacher=\(.teacher_name // "?") (@\(.teacher_username // "?"))\n  group=\(.group_name // "?")\n  room=\(.room // "?")\n  started=\(.started_at // "?")"
-    '
+    if [[ "${count}" == "0" ]]; then
+      return 0
+    fi
+    while IFS= read -r room; do
+      [[ -z "${room}" ]] && continue
+      meta="{}"
+      if [[ -n "${PORTAL_UPLOAD_META_URL:-}" && -n "${PORTAL_UPLOAD_META_TOKEN:-}" ]]; then
+        meta="$(curl -sS --connect-timeout 8 --max-time 20 \
+          -H "Authorization: Bearer ${PORTAL_UPLOAD_META_TOKEN}" \
+          -H "Accept: application/json" \
+          "${PORTAL_UPLOAD_META_URL%/}/portal/api/jitsi/room/${room}/upload-meta/" 2>/dev/null)" || meta="{}"
+      fi
+      line="$(echo "${meta}" | jq -r --arg r "${room}" '
+        "— teacher=\(.teacher_name // "?") (@\(.teacher_username // "?"))\n  group=\(.group_name // "?")\n  room=\($r)"
+      ' 2>/dev/null || echo "— room=${room}")"
+      echo "${line}"
+    done < <(echo "${rooms_json}" | jq -r '.rooms[]?.room // empty' 2>/dev/null)
   }
 }
 

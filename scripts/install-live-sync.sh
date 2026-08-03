@@ -164,4 +164,4 @@ if [[ "${ok}" -eq 0 ]]; then
   }
 fi
 
-echo "[+] Hazır. Hər dəqiqə Prosody → portal /api/jitsi/sync-live/"
+echo "[+] Hazır. Hər dəqiqə Prosody → Telegram Meeting başladı/bitdi (yalnız diff)"

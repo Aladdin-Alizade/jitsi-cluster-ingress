@@ -67,11 +67,10 @@ scp -q "${ssh_opts[@]}" \
   "${ROOT}/scripts/telegram-bot.sh" \
   "${ROOT}/scripts/live-notify.sh" \
   "${ROOT}/scripts/active-rooms.sh" \
-  "${SSH_PRIV}" \
   "ubuntu@${CONTROL_PUBLIC_IP}:~/${STAGE}/"
-# deploy_key adı ilə olsun
-ssh "${ssh_opts[@]}" "ubuntu@${CONTROL_PUBLIC_IP}" \
-  "mv ~/${STAGE}/$(basename "${SSH_PRIV}") ~/${STAGE}/deploy_key"
+# Açar həmişə stage/deploy_key olsun (basename artıq deploy_key olsa mv etmə)
+scp -q "${ssh_opts[@]}" "${SSH_PRIV}" \
+  "ubuntu@${CONTROL_PUBLIC_IP}:~/${STAGE}/deploy_key"
 
 ssh "${ssh_opts[@]}" "ubuntu@${CONTROL_PUBLIC_IP}" "sudo bash -s" <<REMOTE
 set -euo pipefail

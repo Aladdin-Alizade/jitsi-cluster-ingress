@@ -28,7 +28,7 @@ if [[ -f "${CLUSTER_ENV}" ]]; then
   source "${CLUSTER_ENV}"
   set +a
 fi
-if [[ -f /opt/jitsi-cluster/telegram.env ]]; then
+if [[ -r /opt/jitsi-cluster/telegram.env ]]; then
   # shellcheck disable=SC1091
   set -a
   # shellcheck source=/dev/null

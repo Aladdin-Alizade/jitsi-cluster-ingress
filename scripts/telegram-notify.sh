@@ -4,6 +4,7 @@
 # İstifadə:
 #   telegram-notify.sh "mesaj"
 #   echo "mesaj" | telegram-notify.sh
+#   TELEGRAM_DEBUG=1 telegram-notify.sh "test"
 #
 # Env / fayllar (boş dəyər dolunu əzmir; caller export ən yüksək prioritet):
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_TOPIC_ID, TELEGRAM_NOTIFY
@@ -39,10 +40,11 @@ _apply_tg_line() {
 
 _load_tg_file() {
   local f="$1" line
-  [[ -n "${f}" && -f "${f}" ]] || return 0
+  # Unreadable files must not abort (Permission denied on redirect).
+  [[ -n "${f}" && -f "${f}" && -r "${f}" ]] || return 0
   while IFS= read -r line || [[ -n "${line}" ]]; do
     _apply_tg_line "${line}"
-  done < "${f}"
+  done < "${f}" 2>/dev/null || true
 }
 
 _root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd 2>/dev/null || true)"
@@ -68,6 +70,7 @@ TOPIC="$(echo "${TELEGRAM_TOPIC_ID:-}" | tr -d '[:space:]')"
 if [[ -z "${TOKEN}" || -z "${CHAT}" ]]; then
   if [[ "${TELEGRAM_DEBUG:-}" == "1" || "${TELEGRAM_DEBUG:-}" == "true" ]]; then
     echo "telegram-notify: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID empty" >&2
+    echo "telegram-notify: readable telegram.env? $([[ -r /opt/jitsi-cluster/telegram.env ]] && echo yes || echo no)" >&2
   fi
   exit 0
 fi
@@ -111,7 +114,12 @@ if [[ "${TELEGRAM_DEBUG:-}" == "1" || "${TELEGRAM_DEBUG:-}" == "true" ]]; then
   echo "${RESP}" >&2
 fi
 if ! echo "${RESP}" | jq -e '.ok == true' >/dev/null 2>&1; then
-  echo "telegram-notify: send failed (TELEGRAM_DEBUG=1 for details)" >&2
+  # Always show a short reason — cron "send failed" alone is not actionable.
+  err="$(echo "${RESP}" | jq -r '.description // .error_code // empty' 2>/dev/null || true)"
+  if [[ -z "${err}" ]]; then
+    err="$(printf '%s' "${RESP}" | tr '\n' ' ' | cut -c1-180)"
+  fi
+  echo "telegram-notify: send failed: ${err:-unknown}" >&2
 fi
 
 exit 0

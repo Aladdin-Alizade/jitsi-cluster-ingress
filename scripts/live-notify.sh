@@ -28,14 +28,14 @@ if ! flock -n 9; then
   exit 0
 fi
 
-if [[ -f "${CLUSTER_ENV}" ]]; then
+if [[ -r "${CLUSTER_ENV}" ]]; then
   # shellcheck disable=SC1090
   set -a
   # shellcheck source=/dev/null
   source "${CLUSTER_ENV}"
   set +a
 fi
-if [[ -f /opt/jitsi-cluster/telegram.env ]]; then
+if [[ -r /opt/jitsi-cluster/telegram.env ]]; then
   # shellcheck disable=SC1091
   set -a
   # shellcheck source=/dev/null

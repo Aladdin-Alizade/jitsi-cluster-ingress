@@ -91,7 +91,8 @@ TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
 TELEGRAM_TOPIC_ID=${TELEGRAM_TOPIC_ID}
 TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY}
 EOF
-chmod 600 /opt/jitsi-cluster/telegram.env
+# 644: cron root + ops user (ubuntu) TELEGRAM_DEBUG test edə bilir; VM private-dır
+chmod 644 /opt/jitsi-cluster/telegram.env
 
 # cluster.env-ə telegram + recorder IP-ləri merge
 touch /opt/jitsi-cluster/cluster.env

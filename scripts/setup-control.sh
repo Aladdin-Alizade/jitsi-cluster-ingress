@@ -336,7 +336,7 @@ TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
 TELEGRAM_TOPIC_ID=${TELEGRAM_TOPIC_ID:-}
 TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY:-true}
 TGENV
-chmod 600 /opt/jitsi-cluster/telegram.env
+chmod 644 /opt/jitsi-cluster/telegram.env
 
 # Meeting Telegram (Prosody diff) — yalnız bir cron faylı
 if [[ -n "${PORTAL_UPLOAD_META_URL:-}" && -n "${PORTAL_UPLOAD_META_TOKEN:-}" ]]; then

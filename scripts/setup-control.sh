@@ -338,18 +338,19 @@ TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY:-true}
 TGENV
 chmod 600 /opt/jitsi-cluster/telegram.env
 
-# Prosody → portal live sync hər dəqiqə (Telegram olmasa belə)
+# Meeting Telegram (Prosody diff) — yalnız bir cron faylı
 if [[ -n "${PORTAL_UPLOAD_META_URL:-}" && -n "${PORTAL_UPLOAD_META_TOKEN:-}" ]]; then
   mkdir -p /var/log/jitsi /var/lib/jitsi-cluster
   touch /var/log/jitsi/live-notify.log
-  cat > /etc/cron.d/jitsi-live-sync <<'CRON'
+  cat > /etc/cron.d/jitsi-live-notify <<'CRON'
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 SHELL=/bin/bash
 * * * * * root /opt/jitsi-cluster/live-notify.sh >>/var/log/jitsi/live-notify.log 2>&1
 CRON
-  chmod 644 /etc/cron.d/jitsi-live-sync
+  chmod 644 /etc/cron.d/jitsi-live-notify
+  rm -f /etc/cron.d/jitsi-live-sync
   systemctl enable --now cron 2>/dev/null || systemctl enable --now crond 2>/dev/null || true
-  log "Portal live-sync cron quraşdırıldı (* * * * *)"
+  log "Telegram live-notify cron quraşdırıldı (* * * * *, tək fayl)"
 fi
 
 if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then

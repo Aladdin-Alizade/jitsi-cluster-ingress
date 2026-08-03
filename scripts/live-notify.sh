@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # meet-control cron (hər dəqiqə):
 #  Prosody active rooms → Telegram yalnız Meeting başladıldı / Meeting bitdi
-#  State-file diff: hər otaq üçün lifecycle-də bir dəfə (spam yoxdur).
+#  State-file diff: hər otaq lifecycle-də bir dəfə.
+#  flock: paralel cron run spam etməsin.
+#  sticky grace: Prosody bir neçə dəqiqə otağı "yox" saysa belə dərhal bitdi/başladı spam etmə.
 #  Portal sync-live / live-meetings çağırılmır.
-# Exception / health / CRITICAL mesajlara toxunmur.
 
 set +e
 set +u
@@ -14,9 +15,18 @@ NOTIFY_BIN="${NOTIFY_BIN:-/opt/jitsi-cluster/telegram-notify.sh}"
 ACTIVE_ROOMS_BIN="${ACTIVE_ROOMS_BIN:-/opt/jitsi-cluster/active-rooms.sh}"
 STATE_DIR="${STATE_DIR:-/var/lib/jitsi-cluster}"
 STATE_FILE="${STATE_DIR}/live-notify-state.json"
+LOCK_FILE="${STATE_DIR}/live-notify.lock"
 CLUSTER_ENV="${CLUSTER_ENV:-/opt/jitsi-cluster/cluster.env}"
+# Prosody human-count flicker: bu qədər saniyə "yox" qalsa sonra Meeting bitdi
+MISSING_GRACE_SEC="${MISSING_GRACE_SEC:-180}"
 
 mkdir -p "${STATE_DIR}" 2>/dev/null || true
+
+# Parallel cron (köhnə ikili cron.d) eyni anda işləməsin.
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  exit 0
+fi
 
 if [[ -f "${CLUSTER_ENV}" ]]; then
   # shellcheck disable=SC1090
@@ -90,6 +100,15 @@ fetch_room_meta() {
   }' 2>/dev/null || echo '{"teacher_name":"","teacher_email":"","group_name":""}'
 }
 
+epoch_of() {
+  local raw="${1:-}"
+  if [[ -n "${raw}" ]]; then
+    date -d "${raw}" +%s 2>/dev/null || echo ""
+  else
+    echo ""
+  fi
+}
+
 if ! command -v jq >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
   exit 0
 fi
@@ -103,107 +122,138 @@ if ! echo "${rooms_json}" | jq -e '.prosody_ok == true' >/dev/null 2>&1; then
   exit 0
 fi
 
-# room → {teacher_name,teacher_email,group_name,started_at}
-CUR_MAP='{}'
+NOW_ISO="$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')"
+NOW_EPOCH="$(date +%s)"
+
+# Seen this tick from Prosody
+SEEN_MAP='{}'
 while IFS= read -r room; do
   [[ -z "${room}" ]] && continue
   meta="$(fetch_room_meta "${room}")"
-  started="$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')"
-  CUR_MAP="$(jq -c --arg r "${room}" --argjson m "${meta}" --arg s "${started}" '
+  SEEN_MAP="$(jq -c --arg r "${room}" --argjson m "${meta}" --arg s "${NOW_ISO}" '
     . + {
       ($r): {
         teacher_name: ($m.teacher_name // ""),
         teacher_email: ($m.teacher_email // ""),
         group_name: ($m.group_name // ""),
-        started_at: $s
+        started_at: $s,
+        missing_since: null
       }
     }
-  ' <<<"${CUR_MAP}")"
+  ' <<<"${SEEN_MAP}")"
 done < <(echo "${rooms_json}" | jq -r '.rooms[]?.room // empty' 2>/dev/null)
 
-CUR_ROOMS="$(echo "${CUR_MAP}" | jq -r 'keys | sort | join(",")' 2>/dev/null || true)"
 PREV_MAP='{}'
-PREV_ROOMS=""
 if [[ -f "${STATE_FILE}" ]]; then
   PREV_MAP="$(jq -c '.meetings // {}' "${STATE_FILE}" 2>/dev/null || echo '{}')"
-  if [[ "${PREV_MAP}" == "{}" || "${PREV_MAP}" == "null" ]]; then
+  if [[ "${PREV_MAP}" == "null" ]]; then
+    PREV_MAP='{}'
+  fi
+  # Backward compat: older state only had PREV_ROOMS
+  if [[ "${PREV_MAP}" == "{}" ]]; then
     PREV_ROOMS="$(jq -r '.PREV_ROOMS // empty' "${STATE_FILE}" 2>/dev/null || true)"
     if [[ -n "${PREV_ROOMS}" ]]; then
-      PREV_MAP="$(jq -nc --arg r "${PREV_ROOMS}" '
-        reduce ($r | split(",") | .[] | select(length>0)) as $room ({}; . + {($room): {}})
+      PREV_MAP="$(jq -nc --arg r "${PREV_ROOMS}" --arg s "${NOW_ISO}" '
+        reduce ($r | split(",") | .[] | select(length>0)) as $room ({};
+          . + {($room): {teacher_name:"",teacher_email:"",group_name:"",started_at:$s,missing_since:null}}
+        )
       ' 2>/dev/null || echo '{}')"
-    else
-      PREV_MAP='{}'
     fi
   fi
-  PREV_ROOMS="$(echo "${PREV_MAP}" | jq -r 'keys | sort | join(",")' 2>/dev/null || true)"
 fi
-
-# Keep prior started_at / meta when room still open (avoid rewriting timestamps).
-CUR_MAP="$(jq -c --argjson prev "${PREV_MAP}" --argjson cur "${CUR_MAP}" '
-  reduce ($cur | keys[]) as $r ({};
-    . + {
-      ($r): (
-        if ($prev[$r] != null) then
-          {
-            teacher_name: (
-              if (($cur[$r].teacher_name // "") != "") then $cur[$r].teacher_name
-              else ($prev[$r].teacher_name // "") end
-            ),
-            teacher_email: (
-              if (($cur[$r].teacher_email // "") != "") then $cur[$r].teacher_email
-              else ($prev[$r].teacher_email // "") end
-            ),
-            group_name: (
-              if (($cur[$r].group_name // "") != "") then $cur[$r].group_name
-              else ($prev[$r].group_name // "") end
-            ),
-            started_at: ($prev[$r].started_at // $cur[$r].started_at // "")
-          }
-        else $cur[$r]
-        end
-      )
-    }
-  )
-' 2>/dev/null || echo "${CUR_MAP}")"
 
 # İlk run — baseline, spam olmasın
 if [[ ! -f "${STATE_FILE}" ]]; then
-  jq -nc --argjson m "${CUR_MAP}" '{meetings:$m}' >"${STATE_FILE}" 2>/dev/null || true
+  jq -nc --argjson m "${SEEN_MAP}" '{meetings:$m}' >"${STATE_FILE}" 2>/dev/null || true
   chmod 600 "${STATE_FILE}" 2>/dev/null || true
   exit 0
 fi
 
-IFS=',' read -r -a prev_a <<< "${PREV_ROOMS}"
-IFS=',' read -r -a cur_a <<< "${CUR_ROOMS}"
+NEXT_MAP='{}'
+OPENED=()
+CLOSED=()
 
-# Meeting başladı — yalnız yeni otaq
-for room in "${cur_a[@]}"; do
+# 1) Rooms currently visible in Prosody
+while IFS= read -r room; do
   [[ -z "${room}" ]] && continue
-  found=0
-  for p in "${prev_a[@]}"; do [[ "${p}" == "${room}" ]] && found=1 && break; done
-  if (( !found )); then
-    teacher="$(echo "${CUR_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_name // empty')"
-    email="$(echo "${CUR_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_email // empty')"
-    group="$(echo "${CUR_MAP}" | jq -r --arg r "${room}" '.[$r].group_name // empty')"
-    started="$(echo "${CUR_MAP}" | jq -r --arg r "${room}" '.[$r].started_at // empty')"
-    tg "$(fmt_action_msg "Meeting başladıldı:" "${teacher}" "${email}" "${group}" "${room}" "${started}")"
+  seen="$(echo "${SEEN_MAP}" | jq -c --arg r "${room}" '.[$r]' 2>/dev/null)"
+  prev="$(echo "${PREV_MAP}" | jq -c --arg r "${room}" '.[$r] // null' 2>/dev/null)"
+
+  if [[ "${prev}" == "null" || -z "${prev}" ]]; then
+    OPENED+=("${room}")
+    entry="$(echo "${seen}" | jq -c --arg s "${NOW_ISO}" '
+      .started_at = (if (.started_at // "") != "" then .started_at else $s end)
+      | .missing_since = null
+    ')"
+  else
+    # Reappear after brief miss → eyni meeting, yenidən "başladı" yox
+    entry="$(jq -nc --argjson prev "${prev}" --argjson seen "${seen}" --arg s "${NOW_ISO}" '
+      {
+        teacher_name: (
+          if (($seen.teacher_name // "") != "") then $seen.teacher_name
+          else ($prev.teacher_name // "") end
+        ),
+        teacher_email: (
+          if (($seen.teacher_email // "") != "") then $seen.teacher_email
+          else ($prev.teacher_email // "") end
+        ),
+        group_name: (
+          if (($seen.group_name // "") != "") then $seen.group_name
+          else ($prev.group_name // "") end
+        ),
+        started_at: ($prev.started_at // $seen.started_at // $s),
+        missing_since: null
+      }
+    ')"
   fi
+  NEXT_MAP="$(jq -c --arg r "${room}" --argjson e "${entry}" '. + {($r): $e}' <<<"${NEXT_MAP}")"
+done < <(echo "${SEEN_MAP}" | jq -r 'keys[]' 2>/dev/null)
+
+# 2) Previously tracked rooms missing this tick — sticky grace before close
+while IFS= read -r room; do
+  [[ -z "${room}" ]] && continue
+  if echo "${SEEN_MAP}" | jq -e --arg r "${room}" 'has($r)' >/dev/null 2>&1; then
+    continue
+  fi
+  prev="$(echo "${PREV_MAP}" | jq -c --arg r "${room}" '.[$r]' 2>/dev/null)"
+  [[ "${prev}" == "null" || -z "${prev}" ]] && continue
+
+  miss_raw="$(echo "${prev}" | jq -r '.missing_since // empty')"
+  if [[ -z "${miss_raw}" || "${miss_raw}" == "null" ]]; then
+    # İlk "yox" tick — hələ bitdi demə
+    entry="$(echo "${prev}" | jq -c --arg s "${NOW_ISO}" '.missing_since = $s')"
+    NEXT_MAP="$(jq -c --arg r "${room}" --argjson e "${entry}" '. + {($r): $e}' <<<"${NEXT_MAP}")"
+    continue
+  fi
+
+  miss_epoch="$(epoch_of "${miss_raw}")"
+  if [[ -n "${miss_epoch}" ]] && (( NOW_EPOCH - miss_epoch < MISSING_GRACE_SEC )); then
+    # Hələ grace içində — state saxla, mesaj yox
+    NEXT_MAP="$(jq -c --arg r "${room}" --argjson e "${prev}" '. + {($r): $e}' <<<"${NEXT_MAP}")"
+    continue
+  fi
+
+  # Grace bitdi → Meeting bitdi, state-dən çıx
+  CLOSED+=("${room}")
+done < <(echo "${PREV_MAP}" | jq -r 'keys[]' 2>/dev/null)
+
+for room in "${OPENED[@]}"; do
+  [[ -z "${room}" ]] && continue
+  teacher="$(echo "${NEXT_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_name // empty')"
+  email="$(echo "${NEXT_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_email // empty')"
+  group="$(echo "${NEXT_MAP}" | jq -r --arg r "${room}" '.[$r].group_name // empty')"
+  started="$(echo "${NEXT_MAP}" | jq -r --arg r "${room}" '.[$r].started_at // empty')"
+  tg "$(fmt_action_msg "Meeting başladıldı:" "${teacher}" "${email}" "${group}" "${room}" "${started}")"
 done
 
-# Meeting bitdi — yalnız itən otaq
-for room in "${prev_a[@]}"; do
+for room in "${CLOSED[@]}"; do
   [[ -z "${room}" ]] && continue
-  found=0
-  for c in "${cur_a[@]}"; do [[ "${c}" == "${room}" ]] && found=1 && break; done
-  if (( !found )); then
-    teacher="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_name // empty')"
-    email="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_email // empty')"
-    group="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].group_name // empty')"
-    tg "$(fmt_action_msg "Meeting bitdi:" "${teacher}" "${email}" "${group}" "${room}" "")"
-  fi
+  teacher="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_name // empty')"
+  email="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_email // empty')"
+  group="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].group_name // empty')"
+  tg "$(fmt_action_msg "Meeting bitdi:" "${teacher}" "${email}" "${group}" "${room}" "")"
 done
 
-jq -nc --argjson m "${CUR_MAP}" '{meetings:$m}' >"${STATE_FILE}" 2>/dev/null || true
+jq -nc --argjson m "${NEXT_MAP}" '{meetings:$m}' >"${STATE_FILE}" 2>/dev/null || true
 chmod 600 "${STATE_FILE}" 2>/dev/null || true
 exit 0

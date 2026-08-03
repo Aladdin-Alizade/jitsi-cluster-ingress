@@ -105,19 +105,30 @@ if [[ -f "\${PROSODY_CFG}" ]] && ! grep -q '"muc_size"' "\${PROSODY_CFG}"; then
 fi
 
 touch /var/log/jitsi/live-notify.log
-cat > /etc/cron.d/jitsi-live-sync <<'CRON'
+# Tək cron faylı — köhnə jitsi-live-sync / health içindəki dublikatı sil
+cat > /etc/cron.d/jitsi-live-notify <<'CRON'
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 SHELL=/bin/bash
 * * * * * root /opt/jitsi-cluster/live-notify.sh >>/var/log/jitsi/live-notify.log 2>&1
 CRON
-chmod 644 /etc/cron.d/jitsi-live-sync
+chmod 644 /etc/cron.d/jitsi-live-notify
+rm -f /etc/cron.d/jitsi-live-sync
+# health cron-da live-notify qalıbsa çıxar (yalnız health qalsın)
+if [[ -f /etc/cron.d/jitsi-health-notify ]] && grep -q 'live-notify\.sh' /etc/cron.d/jitsi-health-notify; then
+  cat > /etc/cron.d/jitsi-health-notify <<'CRON'
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+SHELL=/bin/bash
+*/5 * * * * root /opt/jitsi-cluster/health-notify.sh >>/var/log/jitsi/health-notify.log 2>&1
+CRON
+  chmod 644 /etc/cron.d/jitsi-health-notify
+fi
 systemctl enable --now cron 2>/dev/null || true
 
 echo "=== active-rooms sample ==="
 /opt/jitsi-cluster/active-rooms.sh --pretty || /opt/jitsi-cluster/active-rooms.sh || true
-echo "=== one-shot sync ==="
+echo "=== one-shot live-notify ==="
 /opt/jitsi-cluster/live-notify.sh || true
-echo "[+] live-sync installed"
+echo "[+] live-notify installed (single cron)"
 REMOTE
 
 copy_and_run_gcloud() {
@@ -164,4 +175,4 @@ if [[ "${ok}" -eq 0 ]]; then
   }
 fi
 
-echo "[+] Hazır. Hər dəqiqə Prosody → Telegram Meeting başladı/bitdi (yalnız diff)"
+echo "[+] Hazır. Hər dəqiqə Prosody → Telegram Meeting başladı/bitdi (tək cron + flock)"

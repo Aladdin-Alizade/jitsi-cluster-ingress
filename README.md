@@ -160,12 +160,12 @@ Yeni deploy-da token `.env`-dədirsə avtomatik quraşır.
 | `schedule-all.sh` | manual start/stop |
 | meet-control cron `*/5` | xidmət/HTTPS/SSL/disk/CPU/JVB/Jibri; recording busy/idle; **CRITICAL-də full diag + Prosody rooms (müəllim/qrup via upload-meta)** |
 | `jitsi-telegram-bot.service` | **interaktiv əmrlər:** `/status` `/live` `/recordings` `/help` |
-| meet-control cron `* * * * *` | **Prosody → Telegram Meeting başladı/bitdi** (yalnız otaq açılıb/bağlananda bir dəfə) |
+| meet-control cron `* * * * *` (`jitsi-live-notify`) | **Prosody → Telegram Meeting başladı/bitdi** (tək cron + flock; sticky grace) |
 | `finalize_recording.sh` / `bunny-upload.sh` | finalize + Bunny OK/FAIL (**teacher / group / session**) |
 
 **Meeting Telegram (bir dəfə / lifecycle)**
 
-`live-notify.sh` hər dəqiqə Prosody-ni oxuyur, amma Telegram yalnız state-file diff-də yeni və ya itən otaq olanda gedir. Portal sync-live / live-meetings yoxdur — görüşü yalnız müəllim bağlayır.
+`live-notify.sh` hər dəqiqə Prosody-ni oxuyur, amma Telegram yalnız state-file diff-də yeni və ya itən otaq olanda gedir (`flock` + 3 dəq sticky grace — Prosody flicker spam etmir). Cron yalnız `/etc/cron.d/jitsi-live-notify` faylındadır (köhnə `jitsi-live-sync` silinməlidir).
 
 Mövcud cluster-ə (redeploy olmadan):
 

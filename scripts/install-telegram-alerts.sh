@@ -116,9 +116,18 @@ cat > /etc/cron.d/jitsi-health-notify <<'CRON'
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 SHELL=/bin/bash
 */5 * * * * root /opt/jitsi-cluster/health-notify.sh >>/var/log/jitsi/health-notify.log 2>&1
-* * * * * root /opt/jitsi-cluster/live-notify.sh >>/var/log/jitsi/live-notify.log 2>&1
 CRON
 chmod 644 /etc/cron.d/jitsi-health-notify
+
+# live-notify yalnız bir cron faylında (köhnə ikili jitsi-live-sync + health spamını sil)
+cat > /etc/cron.d/jitsi-live-notify <<'CRON'
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+SHELL=/bin/bash
+* * * * * root /opt/jitsi-cluster/live-notify.sh >>/var/log/jitsi/live-notify.log 2>&1
+CRON
+chmod 644 /etc/cron.d/jitsi-live-notify
+rm -f /etc/cron.d/jitsi-live-sync
+
 touch /var/log/jitsi/health-notify.log /var/log/jitsi/live-notify.log
 # köhnə shell-state faylı
 rm -f /var/lib/jitsi-cluster/health-state

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # meet-control cron (hər dəqiqə):
 #  1) Prosody active rooms → portal /api/jitsi/sync-live/ (stale open flags bağlanır)
-#  2) portal live meetings → Telegram OPENED/CLOSED
+#  2) portal live meetings → Telegram yalnız Meeting başladı / Meeting bitdi (diff)
 # Yalnız PORTAL_UPLOAD_META_* olanda işləyir.
+# Exception / health / CRITICAL mesajlara toxunmur.
 
 set +e
 set +u
@@ -40,6 +41,31 @@ tg() {
   [[ -x "${NOTIFY_BIN}" ]] && "${NOTIFY_BIN}" "$*" || true
 }
 
+# ISO / epoch / empty → "26 05 2026 saat 14:40 da" (GNU date on meet-control)
+format_vaxt() {
+  local raw="${1:-}" out=""
+  if [[ -n "${raw}" ]]; then
+    out="$(date -d "${raw}" '+%d %m %Y saat %H:%M da' 2>/dev/null || true)"
+  fi
+  if [[ -z "${out}" ]]; then
+    out="$(date '+%d %m %Y saat %H:%M da')"
+  fi
+  printf '%s' "${out}"
+}
+
+# title teacher email group room vaxt_raw
+fmt_action_msg() {
+  local title="$1" teacher="$2" email="$3" group="$4" room="$5" vaxt_raw="$6"
+  local vaxt
+  vaxt="$(format_vaxt "${vaxt_raw}")"
+  [[ -n "${teacher}" ]] || teacher="?"
+  [[ -n "${email}" ]] || email="—"
+  [[ -n "${group}" ]] || group="?"
+  [[ -n "${room}" ]] || room="?"
+  printf '%s\nVaxt: %s\nMuellim-%s (%s)\nGrup- %s\notaq nomresi:%s' \
+    "${title}" "${vaxt}" "${teacher}" "${email}" "${group}" "${room}"
+}
+
 if [[ -z "${PORTAL_UPLOAD_META_URL}" || -z "${PORTAL_UPLOAD_META_TOKEN}" ]]; then
   exit 0
 fi
@@ -67,7 +93,7 @@ if [[ -x "${ACTIVE_ROOMS_BIN}" ]]; then
   fi
 fi
 
-# ---- 2) Telegram OPENED/CLOSED from reconciled portal state --------------- #
+# ---- 2) Telegram Meeting başladı / bitdi (yalnız diff) -------------------- #
 url="${base}/portal/api/jitsi/live-meetings/"
 resp="$(curl -sS --connect-timeout 8 --max-time 20 \
   -H "Authorization: Bearer ${PORTAL_UPLOAD_META_TOKEN}" \
@@ -78,28 +104,42 @@ if ! echo "${resp}" | jq -e '.ok == true' >/dev/null 2>&1; then
   exit 0
 fi
 
-# room → human line
-CUR_JSON="$(echo "${resp}" | jq -c '
-  [.meetings[]? | {
-    room: (.room // ""),
-    line: (
-      "teacher=\(.teacher_name // "?") (@\(.teacher_username // "?"))\n" +
-      "group=\(.group_name // "?")\n" +
-      "room=\(.room // "?")\n" +
-      "started=\(.started_at // "?")"
-    )
-  } | select(.room != "")]
-' 2>/dev/null || echo '[]')"
+# room → {teacher_name,teacher_email,group_name,started_at}
+CUR_MAP="$(echo "${resp}" | jq -c '
+  reduce (.meetings[]? | select((.room // "") != "")) as $m ({};
+    . + {
+      ($m.room): {
+        teacher_name: ($m.teacher_name // ""),
+        teacher_email: ($m.teacher_email // ""),
+        group_name: ($m.group_name // ""),
+        started_at: ($m.started_at // "")
+      }
+    }
+  )
+' 2>/dev/null || echo '{}')"
 
-CUR_ROOMS="$(echo "${CUR_JSON}" | jq -r '[.[].room] | sort | join(",")' 2>/dev/null || true)"
+CUR_ROOMS="$(echo "${CUR_MAP}" | jq -r 'keys | sort | join(",")' 2>/dev/null || true)"
+PREV_MAP='{}'
 PREV_ROOMS=""
 if [[ -f "${STATE_FILE}" ]]; then
-  PREV_ROOMS="$(jq -r '.PREV_ROOMS // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  PREV_MAP="$(jq -c '.meetings // {}' "${STATE_FILE}" 2>/dev/null || echo '{}')"
+  # Backward compat: older state only had PREV_ROOMS
+  if [[ "${PREV_MAP}" == "{}" || "${PREV_MAP}" == "null" ]]; then
+    PREV_ROOMS="$(jq -r '.PREV_ROOMS // empty' "${STATE_FILE}" 2>/dev/null || true)"
+    if [[ -n "${PREV_ROOMS}" ]]; then
+      PREV_MAP="$(jq -nc --arg r "${PREV_ROOMS}" '
+        reduce ($r | split(",") | .[] | select(length>0)) as $room ({}; . + {($room): {}})
+      ' 2>/dev/null || echo '{}')"
+    else
+      PREV_MAP='{}'
+    fi
+  fi
+  PREV_ROOMS="$(echo "${PREV_MAP}" | jq -r 'keys | sort | join(",")' 2>/dev/null || true)"
 fi
 
-# İlk run — baseline, spam olmasın (mövcud open meetinglər üçün flood yox)
+# İlk run — baseline, spam olmasın
 if [[ ! -f "${STATE_FILE}" ]]; then
-  jq -nc --arg r "${CUR_ROOMS}" '{PREV_ROOMS:$r}' >"${STATE_FILE}" 2>/dev/null || true
+  jq -nc --argjson m "${CUR_MAP}" '{meetings:$m}' >"${STATE_FILE}" 2>/dev/null || true
   chmod 600 "${STATE_FILE}" 2>/dev/null || true
   exit 0
 fi
@@ -107,29 +147,35 @@ fi
 IFS=',' read -r -a prev_a <<< "${PREV_ROOMS}"
 IFS=',' read -r -a cur_a <<< "${CUR_ROOMS}"
 
-# OPENED
+# Meeting başladı
 for room in "${cur_a[@]}"; do
   [[ -z "${room}" ]] && continue
   found=0
   for p in "${prev_a[@]}"; do [[ "${p}" == "${room}" ]] && found=1 && break; done
   if (( !found )); then
-    line="$(echo "${CUR_JSON}" | jq -r --arg r "${room}" '.[] | select(.room==$r) | .line' 2>/dev/null)"
-    tg "Jitsi meeting OPENED @ ${DOMAIN:-?}
-${line:-room=${room}}"
+    teacher="$(echo "${CUR_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_name // empty')"
+    email="$(echo "${CUR_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_email // empty')"
+    group="$(echo "${CUR_MAP}" | jq -r --arg r "${room}" '.[$r].group_name // empty')"
+    started="$(echo "${CUR_MAP}" | jq -r --arg r "${room}" '.[$r].started_at // empty')"
+    tg "$(fmt_action_msg "Meeting başladıldı:" "${teacher}" "${email}" "${group}" "${room}" "${started}")"
   fi
 done
 
-# CLOSED
+# Meeting bitdi (context previous state-dən)
 for room in "${prev_a[@]}"; do
   [[ -z "${room}" ]] && continue
   found=0
   for c in "${cur_a[@]}"; do [[ "${c}" == "${room}" ]] && found=1 && break; done
   if (( !found )); then
-    tg "Jitsi meeting CLOSED @ ${DOMAIN:-?}
-room=${room}"
+    teacher="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_name // empty')"
+    email="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].teacher_email // empty')"
+    group="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].group_name // empty')"
+    started="$(echo "${PREV_MAP}" | jq -r --arg r "${room}" '.[$r].started_at // empty')"
+    # Bitmə vaxtı = indi; started_at yalnız kontekst üçündür
+    tg "$(fmt_action_msg "Meeting bitdi:" "${teacher}" "${email}" "${group}" "${room}" "")"
   fi
 done
 
-jq -nc --arg r "${CUR_ROOMS}" '{PREV_ROOMS:$r}' >"${STATE_FILE}" 2>/dev/null || true
+jq -nc --argjson m "${CUR_MAP}" '{meetings:$m}' >"${STATE_FILE}" 2>/dev/null || true
 chmod 600 "${STATE_FILE}" 2>/dev/null || true
 exit 0

@@ -30,6 +30,16 @@ if [[ ! -x "${UPLOAD}" ]]; then
     UPLOAD="$(dirname "$0")/bunny-upload.sh"
     echo "Fallback upload: ${UPLOAD}"
   else
+    TG="/opt/jitsi-jibri/telegram-notify.sh"
+    [[ -x "${TG}" ]] || TG="/opt/jitsi-cluster/telegram-notify.sh"
+    if [[ -x "${TG}" ]]; then
+      vaxt="$(date '+%d %m %Y saat %H:%M da')"
+      "${TG}" "Record problem:
+Vaxt: ${vaxt}
+Muellim-? (—)
+Grup- ?
+Problem: Recording yükləmə skripti tapılmadı (bunny-upload.sh işləmir)."
+    fi
     exit 1
   fi
 fi
@@ -64,27 +74,9 @@ done
 # Optional: strip metadata / ensure readable
 chown -R jibri:jibri "${RECORDING_DIR}" 2>/dev/null || true
 
-TG="/opt/jitsi-jibri/telegram-notify.sh"
-[[ -x "${TG}" ]] || TG="/opt/jitsi-cluster/telegram-notify.sh"
-tg() { [[ -x "${TG}" ]] && "${TG}" "$*" || true; }
-
-ROOM_HINT="$(basename "${RECORDING_DIR}")"
-HOST_HINT="$(hostname -s 2>/dev/null || hostname)"
-# Best-effort room from metadata (session_id basename deyil)
-MEET_HINT=""
-if [[ -f "${RECORDING_DIR}/metadata.json" ]] && command -v jq >/dev/null 2>&1; then
-  MEET_URL="$(jq -r '.meeting_url // .meetingUrl // empty' "${RECORDING_DIR}/metadata.json" 2>/dev/null || true)"
-  if [[ -n "${MEET_URL}" ]]; then
-    MEET_HINT="$(printf '%s' "${MEET_URL}" | sed -E 's|[?#].*$||; s|/*$||; s|^.*/||')"
-  fi
-fi
-CTX="session=${ROOM_HINT}"
-[[ -n "${MEET_HINT}" ]] && CTX+=" room=${MEET_HINT}"
-
+# bunny-upload özü Record problem / Bunny yükələndi mesajlarını göndərir
 if ! "${UPLOAD}" "${RECORDING_DIR}"; then
   echo "ERROR: bunny-upload failed for ${RECORDING_DIR}"
-  tg "Jitsi recording finalize FAIL @ ${HOST_HINT}: ${CTX}"
   exit 1
 fi
-tg "Jitsi recording finalized @ ${HOST_HINT}: ${CTX}"
 echo "==== done $(date -Iseconds) ===="

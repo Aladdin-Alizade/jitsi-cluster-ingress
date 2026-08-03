@@ -49,6 +49,172 @@ tg() {
   fi
 }
 
+# Lifecycle + exception Telegram format (human-readable).
+format_vaxt() {
+  local raw="${1:-}" out=""
+  if [[ -n "${raw}" ]]; then
+    out="$(date -d "${raw}" '+%d %m %Y saat %H:%M da' 2>/dev/null || true)"
+  fi
+  if [[ -z "${out}" ]]; then
+    out="$(date '+%d %m %Y saat %H:%M da')"
+  fi
+  printf '%s' "${out}"
+}
+
+fmt_action_msg() {
+  local title="$1" teacher="$2" email="$3" group="$4" room="$5" vaxt_raw="$6"
+  local vaxt
+  vaxt="$(format_vaxt "${vaxt_raw}")"
+  [[ -n "${teacher}" ]] || teacher="?"
+  [[ -n "${email}" ]] || email="—"
+  [[ -n "${group}" ]] || group="?"
+  [[ -n "${room}" ]] || room="?"
+  printf '%s\nVaxt: %s\nMuellim-%s (%s)\nGrup- %s\notaq nomresi:%s' \
+    "${title}" "${vaxt}" "${teacher}" "${email}" "${group}" "${room}"
+}
+
+fmt_problem_msg() {
+  local kind="$1" teacher="$2" email="$3" group="$4" problem="$5"
+  local vaxt title
+  vaxt="$(format_vaxt "")"
+  [[ -n "${teacher}" ]] || teacher="?"
+  [[ -n "${email}" ]] || email="—"
+  [[ -n "${group}" ]] || group="?"
+  if [[ "${kind}" == "record" ]]; then
+    title="Record problem:"
+  else
+    title="Meeting problem:"
+  fi
+  printf '%s\nVaxt: %s\nMuellim-%s (%s)\nGrup- %s\nProblem: %s' \
+    "${title}" "${vaxt}" "${teacher}" "${email}" "${group}" "${problem}"
+}
+
+# CRITICAL key/msg → human-readable AZ text; echo "meeting|..." or "record|..."
+humanize_health_issue() {
+  local key="$1" msg="$2"
+  case "${key}" in
+    svc_nginx)
+      echo "meeting|Meeting serveri işləmir (nginx sönülüdür)."
+      ;;
+    svc_prosody)
+      echo "meeting|Meeting serveri işləmir (Prosody/XMPP sönülüdür)."
+      ;;
+    svc_jicofo)
+      echo "meeting|Meeting serveri işləmir (Jicofo sönülüdür)."
+      ;;
+    svc_coturn|svc_turnserver)
+      echo "meeting|TURN serveri işləmir — kənar şəbəkədən media bağlantısı kəsilə bilər."
+      ;;
+    https)
+      echo "meeting|İnternetə qoşula bilmədi (HTTPS cavab vermir)."
+      ;;
+    ssl_expired)
+      echo "meeting|SSL sertifikatı vaxtı bitib — brauzerlər meeting səhifəsini bloklaya bilər."
+      ;;
+    disk_root)
+      echo "meeting|Serverdə disk doludur (kök bölüm) — xidmətlər dayana bilər."
+      ;;
+    disk_recordings)
+      echo "record|Recording diski doludur — yeni record yazıla bilməz."
+      ;;
+    jvb_host)
+      echo "meeting|Video bridge (JVB) işləmir — iştirakçılar bir-birini görməyə / eşitməyə bilər."
+      ;;
+    recorder_*)
+      echo "record|Recording serverinə qoşula bilmədi (SSH / VM problem)."
+      ;;
+    jibri_units_*)
+      echo "record|Recording xidməti (Jibri) işləmir — record başlaya bilməz."
+      ;;
+    *)
+      echo "meeting|Problem yaşandı, çünki: ${msg}"
+      ;;
+  esac
+}
+
+# First open portal meeting → teacher/email/group for exception context
+portal_context_for_alerts() {
+  local base token url resp
+  base="${PORTAL_UPLOAD_META_URL:-}"
+  token="${PORTAL_UPLOAD_META_TOKEN:-}"
+  if [[ -z "${base}" || -z "${token}" ]] || ! command -v jq >/dev/null 2>&1; then
+    echo '{"teacher_name":"","teacher_email":"","group_name":""}'
+    return 0
+  fi
+  base="${base%/}"
+  url="${base}/portal/api/jitsi/live-meetings/"
+  resp="$(curl -sS --connect-timeout 8 --max-time 20 \
+    -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/json" \
+    "${url}" 2>/dev/null)" || {
+    echo '{"teacher_name":"","teacher_email":"","group_name":""}'
+    return 0
+  }
+  echo "${resp}" | jq -c '
+    (.meetings // []) as $m |
+    if ($m|length) == 0 then
+      {teacher_name:"", teacher_email:"", group_name:""}
+    else
+      {
+        teacher_name: ($m[0].teacher_name // ""),
+        teacher_email: ($m[0].teacher_email // ""),
+        group_name: ($m[0].group_name // "")
+      }
+    end
+  ' 2>/dev/null || echo '{"teacher_name":"","teacher_email":"","group_name":""}'
+}
+
+# slot key "ip:slotN" → room UUID from recorder metadata (best-effort)
+resolve_room_for_slot() {
+  local key="$1" ip slot port
+  ip="${key%%:*}"
+  slot="${key##*:slot}"
+  [[ -n "${ip}" && -n "${slot}" && "${slot}" =~ ^[0-9]+$ ]] || return 0
+  port=$((2222 + slot - 1))
+  ssh_rec "${ip}" "bash -s" <<REMOTE 2>/dev/null || true
+set +e
+PORT='${port}'
+SLOT='${slot}'
+# Prefer metadata under this slot
+while IFS= read -r m; do
+  [[ -n "\$m" ]] || continue
+  url=\$(jq -r '.meeting_url // .meetingUrl // empty' "\$m" 2>/dev/null || true)
+  [[ -n "\$url" ]] || continue
+  room=\$(printf '%s' "\$url" | sed -E 's|[?#].*\$||; s|/*\$||; s|^.*/||')
+  if [[ "\$room" =~ ^[0-9a-fA-F-]{8,}\$ ]]; then
+    echo "\$room"
+    exit 0
+  fi
+done < <(find "/srv/recordings/slot-\${SLOT}" -name metadata.json -mmin -720 2>/dev/null)
+exit 0
+REMOTE
+}
+
+fetch_portal_room_meta() {
+  local room="$1" base token url resp
+  base="${PORTAL_UPLOAD_META_URL:-}"
+  token="${PORTAL_UPLOAD_META_TOKEN:-}"
+  if [[ -z "${base}" || -z "${token}" || -z "${room}" ]]; then
+    echo '{}'
+    return 0
+  fi
+  base="${base%/}"
+  url="${base}/portal/api/jitsi/room/${room}/upload-meta/"
+  resp="$(curl -sS --connect-timeout 8 --max-time 20 \
+    -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/json" \
+    "${url}" 2>/dev/null)" || {
+    echo '{}'
+    return 0
+  }
+  echo "${resp}" | jq -c '{
+    teacher_name: (.teacher_name // ""),
+    teacher_email: (.teacher_email // ""),
+    group_name: (.group_name // ""),
+    room: (.room // "")
+  }' 2>/dev/null || echo '{}'
+}
+
 # Boot grace — hələ qalxır
 UPTIME_SEC="$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 99999)"
 if (( UPTIME_SEC < BOOT_GRACE_SEC )); then
@@ -305,11 +471,15 @@ build_critical_diag() {
 PREV_ISSUES=""
 PREV_BUSY=""
 PREV_CRIT_TS=0
+PREV_REC_CTX='{}'
 if [[ -f "${STATE_FILE}" ]] && command -v jq >/dev/null 2>&1; then
   PREV_ISSUES="$(jq -r '.PREV_ISSUES // empty' "${STATE_FILE}" 2>/dev/null || true)"
   PREV_BUSY="$(jq -r '.PREV_BUSY // empty' "${STATE_FILE}" 2>/dev/null || true)"
   PREV_CRIT_TS="$(jq -r '.PREV_CRIT_TS // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  PREV_REC_CTX="$(jq -c '.PREV_REC_CTX // {}' "${STATE_FILE}" 2>/dev/null || echo '{}')"
+  [[ -n "${PREV_REC_CTX}" && "${PREV_REC_CTX}" != "null" ]] || PREV_REC_CTX='{}'
 fi
+CUR_REC_CTX="${PREV_REC_CTX}"
 
 CUR_KEYS="$(printf '%s\n' "${ISSUES[@]}" | sort | paste -sd';' -)"
 PREV_KEYS="${PREV_ISSUES:-}"
@@ -357,10 +527,19 @@ time=$(date -Iseconds)"
       found=0
       for p in "${prev_a[@]}"; do [[ "${p}" == "${s}" ]] && found=1 && break; done
       if (( !found )); then
-        # Recording start — portal live context
-        LIVE_HINT="$(fetch_portal_live 2>/dev/null | head -20)"
-        tg "Jitsi recording STARTED: ${s} (${DOMAIN:-})
-${LIVE_HINT}"
+        room="$(resolve_room_for_slot "${s}" | head -1 | tr -d '[:space:]')"
+        meta='{}'
+        if [[ -n "${room}" ]]; then
+          meta="$(fetch_portal_room_meta "${room}")"
+        fi
+        teacher="$(echo "${meta}" | jq -r '.teacher_name // empty')"
+        email="$(echo "${meta}" | jq -r '.teacher_email // empty')"
+        group="$(echo "${meta}" | jq -r '.group_name // empty')"
+        [[ -n "${room}" ]] || room="?"
+        CUR_REC_CTX="$(echo "${CUR_REC_CTX}" | jq -c --arg k "${s}" --arg r "${room}" \
+          --arg t "${teacher}" --arg e "${email}" --arg g "${group}" \
+          '.[$k]={room:$r,teacher_name:$t,teacher_email:$e,group_name:$g}' 2>/dev/null || echo "${CUR_REC_CTX}")"
+        tg "$(fmt_action_msg "Record basladildi:" "${teacher}" "${email}" "${group}" "${room}" "")"
       fi
     done
     for p in "${prev_a[@]}"; do
@@ -368,9 +547,16 @@ ${LIVE_HINT}"
       found=0
       for s in "${cur_a[@]}"; do [[ "${s}" == "${p}" ]] && found=1 && break; done
       if (( !found )); then
-        tg "Jitsi recording IDLE (slot free): ${p} (${DOMAIN:-})"
+        teacher="$(echo "${CUR_REC_CTX}" | jq -r --arg k "${p}" '.[$k].teacher_name // empty')"
+        email="$(echo "${CUR_REC_CTX}" | jq -r --arg k "${p}" '.[$k].teacher_email // empty')"
+        group="$(echo "${CUR_REC_CTX}" | jq -r --arg k "${p}" '.[$k].group_name // empty')"
+        room="$(echo "${CUR_REC_CTX}" | jq -r --arg k "${p}" '.[$k].room // empty')"
+        [[ -n "${room}" ]] || room="?"
+        tg "$(fmt_action_msg "Record bitdi:" "${teacher}" "${email}" "${group}" "${room}" "")"
+        CUR_REC_CTX="$(echo "${CUR_REC_CTX}" | jq -c --arg k "${p}" 'del(.[$k])' 2>/dev/null || echo "${CUR_REC_CTX}")"
       fi
     done
+    # Busy summary yalnız CRITICAL/health MSG-yə (ayrı lifecycle tg artıq göndərilib)
     if [[ -n "${CUR_BUSY}" ]]; then
       MSG+=$'\nrecording busy: '"${CUR_BUSY}"
     elif [[ -n "${PREV_BUSY_S}" ]]; then
@@ -378,14 +564,41 @@ ${LIVE_HINT}"
     fi
   fi
 
-  # CRITICAL → diaqnostika + portal müəllim/meeting
+  # CRITICAL → human-readable Meeting/Record problem (texniki diag yalnız faylda)
   if (( HAS_CRIT )); then
-    DIAG_TEXT="$(build_critical_diag)"
-    MSG+=$'\n\n'"${DIAG_TEXT}"
+    build_critical_diag >/dev/null 2>&1 || true
+    CTX_JSON="$(portal_context_for_alerts)"
+    CTX_TEACHER="$(echo "${CTX_JSON}" | jq -r '.teacher_name // empty')"
+    CTX_EMAIL="$(echo "${CTX_JSON}" | jq -r '.teacher_email // empty')"
+    CTX_GROUP="$(echo "${CTX_JSON}" | jq -r '.group_name // empty')"
+
+    MEET_PROBS=()
+    REC_PROBS=()
+    for line in "${ISSUES[@]}"; do
+      [[ "${line}" == CRITICAL\|* ]] || continue
+      IFS='|' read -r _lvl key msg <<<"${line}"
+      hum="$(humanize_health_issue "${key}" "${msg}")"
+      kind="${hum%%|*}"
+      text="${hum#*|}"
+      if [[ "${kind}" == "record" ]]; then
+        REC_PROBS+=("${text}")
+      else
+        MEET_PROBS+=("${text}")
+      fi
+    done
+
+    if (( ${#MEET_PROBS[@]} > 0 )); then
+      joined="$(printf '%s ' "${MEET_PROBS[@]}" | sed 's/[[:space:]]*$//')"
+      tg "$(fmt_problem_msg meeting "${CTX_TEACHER}" "${CTX_EMAIL}" "${CTX_GROUP}" "${joined}")"
+    fi
+    if (( ${#REC_PROBS[@]} > 0 )); then
+      joined="$(printf '%s ' "${REC_PROBS[@]}" | sed 's/[[:space:]]*$//')"
+      tg "$(fmt_problem_msg record "${CTX_TEACHER}" "${CTX_EMAIL}" "${CTX_GROUP}" "${joined}")"
+    fi
   fi
 
-  if [[ "${CUR_KEYS}" != "${PREV_KEYS}" ]] \
-    || (( HAS_CRIT && NOW_TS - PREV_CRIT_TS >= CRIT_COOLDOWN_SEC )); then
+  # WARN / status dəyişməsi — CRITICAL artıq human formatda göndərilib; yalnız non-crit spam
+  if [[ "${CUR_KEYS}" != "${PREV_KEYS}" ]] && (( ! HAS_CRIT )); then
     tg "${MSG}"
   fi
 
@@ -399,7 +612,8 @@ if command -v jq >/dev/null 2>&1; then
     --arg issues "${CUR_KEYS}" \
     --arg busy "${CUR_BUSY}" \
     --argjson ts "${PREV_CRIT_TS:-0}" \
-    '{PREV_ISSUES:$issues,PREV_BUSY:$busy,PREV_CRIT_TS:$ts}' \
+    --argjson ctx "${CUR_REC_CTX:-{}}" \
+    '{PREV_ISSUES:$issues,PREV_BUSY:$busy,PREV_CRIT_TS:$ts,PREV_REC_CTX:$ctx}' \
     >"${STATE_FILE}" 2>/dev/null || true
   chmod 600 "${STATE_FILE}" 2>/dev/null || true
 fi

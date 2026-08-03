@@ -160,6 +160,7 @@ resolve_collection_id() {
   : > "${WORKDIR}/meta_group.txt"
   : > "${WORKDIR}/meta_teacher.txt"
   : > "${WORKDIR}/meta_teacher_user.txt"
+  : > "${WORKDIR}/meta_teacher_email.txt"
   : > "${WORKDIR}/meta_session.txt"
   : > "${WORKDIR}/meta_group_id.txt"
   : > "${WORKDIR}/meta_meeting_open.txt"
@@ -183,12 +184,14 @@ resolve_collection_id() {
   gname="$(echo "${resp}" | jq -r '.group_name // empty' 2>/dev/null || true)"
   tname="$(echo "${resp}" | jq -r '.teacher_name // empty' 2>/dev/null || true)"
   tuname="$(echo "${resp}" | jq -r '.teacher_username // empty' 2>/dev/null || true)"
+  temail="$(echo "${resp}" | jq -r '.teacher_email // empty' 2>/dev/null || true)"
   sid="$(echo "${resp}" | jq -r '.session_id // empty' 2>/dev/null || true)"
   gid="$(echo "${resp}" | jq -r '.group_id // empty' 2>/dev/null || true)"
   mopen="$(echo "${resp}" | jq -r '.meeting_open // empty' 2>/dev/null || true)"
   [[ -n "${gname}" ]] && printf '%s' "${gname}" > "${WORKDIR}/meta_group.txt"
   [[ -n "${tname}" ]] && printf '%s' "${tname}" > "${WORKDIR}/meta_teacher.txt"
   [[ -n "${tuname}" ]] && printf '%s' "${tuname}" > "${WORKDIR}/meta_teacher_user.txt"
+  [[ -n "${temail}" ]] && printf '%s' "${temail}" > "${WORKDIR}/meta_teacher_email.txt"
   [[ -n "${sid}" && "${sid}" != "null" ]] && printf '%s' "${sid}" > "${WORKDIR}/meta_session.txt"
   [[ -n "${gid}" && "${gid}" != "null" ]] && printf '%s' "${gid}" > "${WORKDIR}/meta_group_id.txt"
   [[ -n "${mopen}" && "${mopen}" != "null" ]] && printf '%s' "${mopen}" > "${WORKDIR}/meta_meeting_open.txt"
@@ -277,14 +280,87 @@ COLLECTION_ID="$(resolve_collection_id "${ROOM_NAME}")"
 GROUP_NAME="$(cat "${WORKDIR}/meta_group.txt" 2>/dev/null || true)"
 TEACHER_NAME="$(cat "${WORKDIR}/meta_teacher.txt" 2>/dev/null || true)"
 TEACHER_USER="$(cat "${WORKDIR}/meta_teacher_user.txt" 2>/dev/null || true)"
+TEACHER_EMAIL="$(cat "${WORKDIR}/meta_teacher_email.txt" 2>/dev/null || true)"
 SESSION_ID="$(cat "${WORKDIR}/meta_session.txt" 2>/dev/null || true)"
 GROUP_ID="$(cat "${WORKDIR}/meta_group_id.txt" 2>/dev/null || true)"
 MEETING_OPEN="$(cat "${WORKDIR}/meta_meeting_open.txt" 2>/dev/null || true)"
+
+format_vaxt() {
+  local raw="${1:-}" out=""
+  if [[ -n "${raw}" ]]; then
+    out="$(date -d "${raw}" '+%d %m %Y saat %H:%M da' 2>/dev/null || true)"
+  fi
+  if [[ -z "${out}" ]]; then
+    out="$(date '+%d %m %Y saat %H:%M da')"
+  fi
+  printf '%s' "${out}"
+}
+
+# title without room (Bunny upload / local delete)
+fmt_upload_msg() {
+  local title="$1"
+  local teacher="${TEACHER_NAME:-?}"
+  local email="${TEACHER_EMAIL:-—}"
+  local group="${GROUP_NAME:-?}"
+  local vaxt
+  vaxt="$(format_vaxt "")"
+  printf '%s\nVaxt: %s\nMuellim-%s (%s)\nGrup- %s' \
+    "${title}" "${vaxt}" "${teacher}" "${email}" "${group}"
+}
+
+fmt_record_problem() {
+  local problem="$1"
+  local teacher="${TEACHER_NAME:-?}"
+  local email="${TEACHER_EMAIL:-—}"
+  local group="${GROUP_NAME:-?}"
+  local vaxt
+  vaxt="$(format_vaxt "")"
+  printf 'Record problem:\nVaxt: %s\nMuellim-%s (%s)\nGrup- %s\nProblem: %s' \
+    "${vaxt}" "${teacher}" "${email}" "${group}" "${problem}"
+}
+
+# Map technical upload failures → human-readable Azerbaijani
+humanize_bunny_problem() {
+  local code="${1:-}" detail="${2:-}"
+  case "${code}" in
+    000|"")
+      echo "İnternetə qoşula bilmədi (Bunny serverinə çatılmadı)."
+      ;;
+    401|403)
+      echo "Token səhvdir (Bunny API açarı yanlış və ya icazə yoxdur)."
+      ;;
+    404)
+      echo "Bunny-də video və ya library tapılmadı (yanlış library ID ola bilər)."
+      ;;
+    408|429)
+      echo "Bunny serveri cavab vermədi və ya limit aşıldı (bir az sonra yenidən yoxlayın)."
+      ;;
+    500|502|503|504)
+      echo "Serverdə problem var (Bunny müvəqqəti işləmir, HTTP ${code})."
+      ;;
+    create)
+      echo "Bunny-də video yaradıla bilmədi${detail:+ — ${detail}}."
+      ;;
+    no_files)
+      echo "Recording faylı tapılmadı və ya heç bir fayl Bunny-ə yüklənmədi."
+      ;;
+    *)
+      if [[ "${code}" =~ ^4[0-9][0-9]$ ]]; then
+        echo "Bunny sorğunu rədd etdi (HTTP ${code}${detail:+ — ${detail}})."
+      elif [[ "${code}" =~ ^5[0-9][0-9]$ ]]; then
+        echo "Serverdə problem var (Bunny xətası, HTTP ${code})."
+      else
+        echo "Problem yaşandı, çünki Bunny yükləməsi uğursuz oldu${code:+ (HTTP ${code})}${detail:+ — ${detail}}."
+      fi
+      ;;
+  esac
+}
 
 portal_tg_lines() {
   local lines=""
   [[ -n "${TEACHER_NAME}" ]] && lines+=$'\n'"teacher=${TEACHER_NAME}"
   [[ -n "${TEACHER_USER}" ]] && lines+=$'\n'"teacher_user=${TEACHER_USER}"
+  [[ -n "${TEACHER_EMAIL}" ]] && lines+=$'\n'"teacher_email=${TEACHER_EMAIL}"
   [[ -n "${GROUP_NAME}" ]] && lines+=$'\n'"group=${GROUP_NAME}"
   [[ -n "${GROUP_ID}" ]] && lines+=$'\n'"group_id=${GROUP_ID}"
   [[ -n "${SESSION_ID}" ]] && lines+=$'\n'"session_id=${SESSION_ID}"
@@ -307,6 +383,7 @@ for SRC in "${MP4S[@]}"; do
   if [[ -z "${VIDEO_ID}" || "${VIDEO_ID}" == "null" ]]; then
     err "Bunny Stream video ID qaytarmadı"
     cat "${RESP_FILE}" 2>/dev/null || true
+    tg "$(fmt_record_problem "$(humanize_bunny_problem create "video ID qaytarmadı")")"
     continue
   fi
   log "Video ID: ${VIDEO_ID}"
@@ -350,21 +427,14 @@ for SRC in "${MP4S[@]}"; do
     # Auto-create published lesson on ingress portal (title: DD.MM.YYYY-part-N)
     notify_portal_recording_complete "${ROOM_NAME}" "${VIDEO_ID}" || true
 
-    tg "Jitsi Bunny upload OK
-room=${ROOM_NAME}
-video_id=${VIDEO_ID}
-library=${LIBRARY_ID}
-collection=${COLLECTION_ID:-root}$(portal_tg_lines)"
+    tg "$(fmt_upload_msg "Record bunny e yuklendi:")"
 
     rm -f "${SRC}"
     OK=1
   else
     err "Upload failed HTTP ${HTTP_CODE} for ${SRC} (video_id=${VIDEO_ID})"
     cat "${RESP_FILE}" >&2 || true
-    tg "Jitsi Bunny upload FAIL
-room=${ROOM_NAME}
-video_id=${VIDEO_ID}
-http=${HTTP_CODE}$(portal_tg_lines)"
+    tg "$(fmt_record_problem "$(humanize_bunny_problem "${HTTP_CODE}" "video_id=${VIDEO_ID}")")"
     # Best-effort cleanup of empty video object
     curl -sS --connect-timeout 10 --max-time 30 -X DELETE \
       "${STREAM_API}/library/${LIBRARY_ID}/videos/${VIDEO_ID}" \
@@ -377,9 +447,10 @@ if [[ "${OK}" -eq 1 ]]; then
   if [[ -z "$(find "${RECORDING_DIR}" -type f \( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \) 2>/dev/null | head -1)" ]]; then
     log "Lokal recording silinir: ${RECORDING_DIR}"
     rm -rf "${RECORDING_DIR}"
+    tg "$(fmt_upload_msg "Record jitsi serverden silindi:")"
   fi
   exit 0
 fi
 
-tg "Jitsi Bunny upload FAIL (no OK files) room=${ROOM_NAME:-?} dir=${RECORDING_DIR}$(portal_tg_lines)"
+tg "$(fmt_record_problem "$(humanize_bunny_problem no_files "")")"
 exit 1

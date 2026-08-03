@@ -210,7 +210,20 @@ Health spam-i azdır: yalnız status dəyişəndə; CRITICAL ~60 dəq-də bir t�
 Log: `/var/log/jitsi/health-notify.log`. CRITICAL diaq: `/var/log/jitsi/health-diag/crit-*.log`.
 Live meeting log: `/var/log/jitsi/live-notify.log`. Bot log: `journalctl -u jitsi-telegram-bot -f`.
 
-**Vacib:** yalnız meeting açmaq əvvəl Telegram göndərmirdi. İndi `live-notify` portalda room açılınca `meeting OPENED` yazır. **Recording** üçün ayrıca Meet-də Start recording lazımdır → `recording STARTED` (health, ~5 dəq).
+**Vacib:** Telegram lifecycle mesajları yalnız action olanda gedir (hər dəqiqə spam yoxdur):
+
+- `Meeting başladıldı` / `Meeting bitdi` — `live-notify` (Prosody↔portal diff)
+- `Record basladildi` / `Record bitdi` — `health-notify` (Jibri busy↔idle)
+- `Record bunny e yuklendi` / `Record jitsi serverden silindi` — `bunny-upload.sh` (upload OK + lokal silmə)
+
+Format: Vaxt, Müəllim (email), Qrup (+ otaq meeting/record lifecycle-də).
+
+Exception (human-readable):
+
+- `Meeting problem` — Prosody/Jicofo/Nginx/HTTPS/JVB və s. CRITICAL
+- `Record problem` — Jibri/recorder/disk və Bunny upload FAIL
+
+Texniki diag CRITICAL-də `/var/log/jitsi/health-diag/` faylında qalır; Telegram-a qısa Problem mətni gedir.
 
 **Bot əmrləri** (yalnız `.env`-dəki `TELEGRAM_CHAT_ID` chatından):
 

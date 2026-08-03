@@ -144,7 +144,7 @@ systemctl restart jitsi-telegram-bot.service
 
 /opt/jitsi-cluster/telegram-notify.sh "Jitsi Telegram alerts + bot installed on meet-control (${DOMAIN})
 Əmrlər: /status /live /recordings /help
-Meeting OPENED/CLOSED: avtomatik (~1 dəq)"
+Meeting/Record başladı/bitdi: avtomatik (yalnız action)"
 REMOTE
 
 echo "[+] Recorder-lərə telegram-notify + env..."

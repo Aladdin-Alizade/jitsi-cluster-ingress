@@ -57,26 +57,34 @@ JUMP_OPTS=(
 )
 
 echo "[+] Control-a telegram + health quraşdırılır..."
+# /tmp-də əvvəlki root-owned fayllar scp-ni pozur — home stage istifadə et
+STAGE="jitsi-install-stage"
+ssh "${ssh_opts[@]}" "ubuntu@${CONTROL_PUBLIC_IP}" \
+  "rm -rf ~/${STAGE} && mkdir -p ~/${STAGE} && sudo rm -f /tmp/telegram-notify.sh /tmp/health-notify.sh /tmp/telegram-bot.sh /tmp/live-notify.sh /tmp/active-rooms.sh /tmp/deploy_key"
 scp -q "${ssh_opts[@]}" \
   "${ROOT}/scripts/telegram-notify.sh" \
   "${ROOT}/scripts/health-notify.sh" \
   "${ROOT}/scripts/telegram-bot.sh" \
   "${ROOT}/scripts/live-notify.sh" \
   "${ROOT}/scripts/active-rooms.sh" \
-  "ubuntu@${CONTROL_PUBLIC_IP}:/tmp/"
-scp -q "${ssh_opts[@]}" "${SSH_PRIV}" "ubuntu@${CONTROL_PUBLIC_IP}:/tmp/deploy_key"
+  "${SSH_PRIV}" \
+  "ubuntu@${CONTROL_PUBLIC_IP}:~/${STAGE}/"
+# deploy_key adı ilə olsun
+ssh "${ssh_opts[@]}" "ubuntu@${CONTROL_PUBLIC_IP}" \
+  "mv ~/${STAGE}/$(basename "${SSH_PRIV}") ~/${STAGE}/deploy_key"
 
 ssh "${ssh_opts[@]}" "ubuntu@${CONTROL_PUBLIC_IP}" "sudo bash -s" <<REMOTE
 set -euo pipefail
+STAGE_DIR="/home/ubuntu/${STAGE}"
 mkdir -p /opt/jitsi-cluster /var/lib/jitsi-cluster /var/log/jitsi
-install -m 755 /tmp/telegram-notify.sh /opt/jitsi-cluster/telegram-notify.sh
-install -m 755 /tmp/health-notify.sh /opt/jitsi-cluster/health-notify.sh
-install -m 755 /tmp/telegram-bot.sh /opt/jitsi-cluster/telegram-bot.sh
-install -m 755 /tmp/live-notify.sh /opt/jitsi-cluster/live-notify.sh
-install -m 755 /tmp/active-rooms.sh /opt/jitsi-cluster/active-rooms.sh
-mv /tmp/deploy_key /opt/jitsi-cluster/deploy_key
-chmod 600 /opt/jitsi-cluster/deploy_key
+install -m 755 "\${STAGE_DIR}/telegram-notify.sh" /opt/jitsi-cluster/telegram-notify.sh
+install -m 755 "\${STAGE_DIR}/health-notify.sh" /opt/jitsi-cluster/health-notify.sh
+install -m 755 "\${STAGE_DIR}/telegram-bot.sh" /opt/jitsi-cluster/telegram-bot.sh
+install -m 755 "\${STAGE_DIR}/live-notify.sh" /opt/jitsi-cluster/live-notify.sh
+install -m 755 "\${STAGE_DIR}/active-rooms.sh" /opt/jitsi-cluster/active-rooms.sh
+install -m 600 "\${STAGE_DIR}/deploy_key" /opt/jitsi-cluster/deploy_key
 chown root:root /opt/jitsi-cluster/deploy_key
+rm -rf "\${STAGE_DIR}"
 
 cat > /opt/jitsi-cluster/telegram.env <<EOF
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
@@ -151,17 +159,22 @@ echo "[+] Recorder-lərə telegram-notify + env..."
 for ip in "${JIBRI_PRIVATE_IPS[@]}"; do
   [[ -n "${ip}" ]] || continue
   echo "  → ${ip}"
+  ssh "${ssh_opts[@]}" "${JUMP_OPTS[@]}" "ubuntu@${ip}" \
+    "rm -rf ~/${STAGE} && mkdir -p ~/${STAGE} && sudo rm -f /tmp/telegram-notify.sh /tmp/bunny-upload.sh /tmp/finalize_recording.sh" \
+    || { echo "ssh prep fail ${ip}"; continue; }
   scp -q "${ssh_opts[@]}" "${JUMP_OPTS[@]}" \
     "${ROOT}/scripts/telegram-notify.sh" \
     "${ROOT}/scripts/bunny-upload.sh" \
     "${ROOT}/scripts/finalize_recording.sh" \
-    "ubuntu@${ip}:/tmp/" || { echo "scp fail ${ip}"; continue; }
+    "ubuntu@${ip}:~/${STAGE}/" || { echo "scp fail ${ip}"; continue; }
   ssh "${ssh_opts[@]}" "${JUMP_OPTS[@]}" "ubuntu@${ip}" "sudo bash -s" <<REMOTE
 set -euo pipefail
+STAGE_DIR="/home/ubuntu/${STAGE}"
 mkdir -p /opt/jitsi-jibri
-install -m 755 -o jibri -g jibri /tmp/telegram-notify.sh /opt/jitsi-jibri/telegram-notify.sh
-install -m 755 -o jibri -g jibri /tmp/bunny-upload.sh /opt/jitsi-jibri/bunny-upload.sh
-install -m 755 -o jibri -g jibri /tmp/finalize_recording.sh /opt/jitsi-jibri/finalize_recording.sh
+install -m 755 -o jibri -g jibri "\${STAGE_DIR}/telegram-notify.sh" /opt/jitsi-jibri/telegram-notify.sh
+install -m 755 -o jibri -g jibri "\${STAGE_DIR}/bunny-upload.sh" /opt/jitsi-jibri/bunny-upload.sh
+install -m 755 -o jibri -g jibri "\${STAGE_DIR}/finalize_recording.sh" /opt/jitsi-jibri/finalize_recording.sh
+rm -rf "\${STAGE_DIR}"
 cat > /opt/jitsi-jibri/telegram.env <<EOF
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
 TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
@@ -183,7 +196,6 @@ TELEGRAM_NOTIFY=${TELEGRAM_NOTIFY}
 EOF
 chown jibri:jibri /opt/jitsi-jibri/bunny.env
 chmod 600 /opt/jitsi-jibri/bunny.env
-rm -f /tmp/telegram-notify.sh /tmp/bunny-upload.sh /tmp/finalize_recording.sh
 REMOTE
 done
 

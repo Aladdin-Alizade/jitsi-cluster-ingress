@@ -23,15 +23,22 @@ config.enableLayerSuspension = true;
 
 // AV1 → JVB Av1DDQualityFilter crash (IndexOutOfBounds) — video düşür, iştirakçılar
 // bir-birini görmür. VP8/VP9 ilə sabit qalır.
+// maxBitrates: screenshare/yazı oxunaqlığı üçün yüksək high layer (bps).
 config.videoQuality = {
     codecPreferenceOrder: [ 'VP8', 'VP9', 'H264' ],
     mobileCodecPreferenceOrder: [ 'VP8', 'H264', 'VP9' ],
     screenshareCodec: 'VP8',
-    mobileScreenshareCodec: 'VP8'
+    mobileScreenshareCodec: 'VP8',
+    maxBitratesVideo: {
+        low: 200000,
+        standard: 1000000,
+        high: 2500000
+    }
 };
 config.disabledCodecs = [ 'AV1' ];
 
-config.desktopSharingFrameRate = { min: 5, max: 30 };
+// Aşağı fps → hər frame-ə daha çox bit → sənəd/kod screenshare oxunaqlı qalır
+config.desktopSharingFrameRate = { min: 5, max: 15 };
 
 // 3+ nəfər üçün server üzərindən (live ilə eyni)
 config.p2p = {

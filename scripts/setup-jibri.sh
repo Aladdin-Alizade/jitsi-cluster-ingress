@@ -438,12 +438,12 @@ jibri {
     ]
   }
 
-  # Screen recording: 1080p saxla, fps/CRF/preset ilə ölçü azalt
+  # Screen recording: 1080p, yazı/screenshare üçün daha yüksək keyfiyyət
   ffmpeg {
     resolution = "1920x1080"
-    framerate = 15
+    framerate = 30
     video-encode-preset-recording = "medium"
-    h264-constant-rate-factor = 22
+    h264-constant-rate-factor = 18
     audio-source = "alsa"
     audio-device = "plug:bsnoop"
   }

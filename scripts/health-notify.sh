@@ -3,6 +3,8 @@
 # Spam az: yalnız status dəyişəndə; CRITICAL hər 60 dəq təkrarlana bilər.
 # Boot-dan sonra 8 dəq grace (scheduler start-da false CRITICAL olmasın).
 # CRITICAL olanda: recorder diaqnostika + portal live meetings (müəllim/qrup).
+# Record basladildi: Jibri busy diff + room meta (metadata/mp4 və ya tək live otaq).
+# State atomic yazılır (jq fail → köhnə PREV_BUSY silinmir; əks halda */5 spam).
 
 set +e
 set +u
@@ -12,6 +14,8 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH
 NOTIFY_BIN="${NOTIFY_BIN:-/opt/jitsi-cluster/telegram-notify.sh}"
 STATE_DIR="${STATE_DIR:-/var/lib/jitsi-cluster}"
 STATE_FILE="${STATE_DIR}/health-state.json"
+LIVE_STATE_FILE="${LIVE_STATE_FILE:-${STATE_DIR}/live-notify-state.json}"
+LOCK_FILE="${STATE_DIR}/health-notify.lock"
 DIAG_DIR="${DIAG_DIR:-/var/log/jitsi/health-diag}"
 CRIT_COOLDOWN_SEC="${CRIT_COOLDOWN_SEC:-3600}"
 BOOT_GRACE_SEC="${BOOT_GRACE_SEC:-480}"
@@ -20,6 +24,12 @@ SSH_KEY="${SSH_KEY:-/opt/jitsi-cluster/deploy_key}"
 SSH_USER="${SSH_USER:-ubuntu}"
 
 mkdir -p "${STATE_DIR}" "${DIAG_DIR}" 2>/dev/null || true
+
+# Parallel cron overlap → state truncate / Record basladildi spam
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  exit 0
+fi
 
 if [[ -f "${CLUSTER_ENV}" ]]; then
   # shellcheck disable=SC1090
@@ -158,30 +168,99 @@ portal_context_for_alerts() {
   }' 2>/dev/null || echo '{"teacher_name":"","teacher_email":"","group_name":""}'
 }
 
-# slot key "ip:slotN" → room UUID from recorder metadata (best-effort)
+# slot key "ip:slotN" → room UUID from recorder metadata / newest mp4 (best-effort)
 resolve_room_for_slot() {
-  local key="$1" ip slot port
+  local key="$1" ip slot
   ip="${key%%:*}"
   slot="${key##*:slot}"
   [[ -n "${ip}" && -n "${slot}" && "${slot}" =~ ^[0-9]+$ ]] || return 0
-  port=$((2222 + slot - 1))
   ssh_rec "${ip}" "bash -s" <<REMOTE 2>/dev/null || true
 set +e
-PORT='${port}'
 SLOT='${slot}'
-# Prefer metadata under this slot
+extract_room() {
+  local raw="\$1" room base
+  [[ -n "\$raw" ]] || return 1
+  room=\$(printf '%s' "\$raw" | sed -E 's|[?#].*\$||; s|/*\$||; s|^.*/||')
+  if [[ "\$room" =~ ^[0-9a-fA-F-]{8,}\$ ]]; then
+    echo "\$room"
+    return 0
+  fi
+  return 1
+}
+# Newest metadata.json first (mtime)
 while IFS= read -r m; do
   [[ -n "\$m" ]] || continue
   url=\$(jq -r '.meeting_url // .meetingUrl // empty' "\$m" 2>/dev/null || true)
-  [[ -n "\$url" ]] || continue
-  room=\$(printf '%s' "\$url" | sed -E 's|[?#].*\$||; s|/*\$||; s|^.*/||')
-  if [[ "\$room" =~ ^[0-9a-fA-F-]{8,}\$ ]]; then
-    echo "\$room"
+  if extract_room "\$url"; then
     exit 0
   fi
-done < <(find "/srv/recordings/slot-\${SLOT}" -name metadata.json -mmin -720 2>/dev/null)
+done < <(find "/srv/recordings/slot-\${SLOT}" -name metadata.json -mmin -720 -printf '%T@\t%p\n' 2>/dev/null | sort -rn | cut -f2-)
+# Fallback: newest mp4 callName prefix
+while IFS= read -r f; do
+  [[ -n "\$f" ]] || continue
+  base=\$(basename "\$f")
+  base="\${base%.*}"
+  if [[ "\$base" =~ ^(.+)_[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}\$ ]]; then
+    room="\${BASH_REMATCH[1]}"
+    if [[ "\$room" =~ ^[0-9a-fA-F-]{8,}\$ ]]; then
+      echo "\$room"
+      exit 0
+    fi
+  fi
+done < <(find "/srv/recordings/slot-\${SLOT}" \\( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \\) -mmin -720 -printf '%T@\t%p\n' 2>/dev/null | sort -rn | cut -f2-)
 exit 0
 REMOTE
+}
+
+# Active Prosody / live-notify rooms not yet bound to a busy slot in CUR_REC_CTX
+unassigned_live_rooms() {
+  local rooms_bin rooms_json live_json assigned room
+  assigned="$(echo "${CUR_REC_CTX:-{}}" | jq -r 'to_entries[] | .value.room // empty' 2>/dev/null | grep -E '^[0-9a-fA-F-]{8,}$' || true)"
+  rooms_bin="${ACTIVE_ROOMS_BIN:-/opt/jitsi-cluster/active-rooms.sh}"
+  rooms_json=""
+  if [[ -x "${rooms_bin}" ]]; then
+    rooms_json="$("${rooms_bin}" 2>/dev/null)" || rooms_json=""
+  fi
+  if echo "${rooms_json}" | jq -e '.prosody_ok == true' >/dev/null 2>&1; then
+    while IFS= read -r room; do
+      [[ -n "${room}" ]] || continue
+      if echo "${assigned}" | grep -qxF "${room}"; then
+        continue
+      fi
+      printf '%s\n' "${room}"
+    done < <(echo "${rooms_json}" | jq -r '.rooms[]?.room // empty' 2>/dev/null)
+    return 0
+  fi
+  # Fallback: live-notify sticky state (Prosody flicker-safe)
+  if [[ -f "${LIVE_STATE_FILE}" ]]; then
+    live_json="$(jq -c '.meetings // {}' "${LIVE_STATE_FILE}" 2>/dev/null || echo '{}')"
+    while IFS= read -r room; do
+      [[ -n "${room}" ]] || continue
+      if echo "${assigned}" | grep -qxF "${room}"; then
+        continue
+      fi
+      printf '%s\n' "${room}"
+    done < <(echo "${live_json}" | jq -r 'keys[]' 2>/dev/null)
+  fi
+}
+
+# Resolve room for a newly-busy slot: metadata → single unassigned live room
+resolve_recording_room() {
+  local key="$1" room candidates count
+  room="$(resolve_room_for_slot "${key}" | head -1 | tr -d '[:space:]')"
+  if [[ "${room}" =~ ^[0-9a-fA-F-]{8,}$ ]]; then
+    printf '%s' "${room}"
+    return 0
+  fi
+  candidates="$(unassigned_live_rooms | head -20)"
+  count="$(printf '%s\n' "${candidates}" | grep -cE '^[0-9a-fA-F-]{8,}$' 2>/dev/null || true)"
+  count="$(echo "${count}" | tr -d '[:space:]')"
+  [[ "${count}" =~ ^[0-9]+$ ]] || count=0
+  if [[ "${count}" == "1" ]]; then
+    printf '%s' "$(printf '%s\n' "${candidates}" | grep -E '^[0-9a-fA-F-]{8,}$' | head -1)"
+    return 0
+  fi
+  return 0
 }
 
 fetch_portal_room_meta() {
@@ -480,6 +559,39 @@ for line in "${ISSUES[@]}"; do
   [[ "${line}" == CRITICAL\|* ]] && HAS_CRIT=1
 done
 
+# Hələ busy olan slotlarda room=? qalıbsa — metadata artıq yazılıbsa doldur (Telegram yenidən getmir)
+if [[ -n "${CUR_BUSY}" ]] && command -v jq >/dev/null 2>&1; then
+  IFS=';' read -r -a _busy_enrich <<< "${CUR_BUSY}"
+  for s in "${_busy_enrich[@]}"; do
+    [[ -z "${s}" ]] && continue
+    old_room="$(echo "${CUR_REC_CTX}" | jq -r --arg k "${s}" '.[$k].room // empty' 2>/dev/null || true)"
+    if [[ -n "${old_room}" && "${old_room}" != "?" ]]; then
+      continue
+    fi
+    # Yeni tick-də hələ ctx-də yoxdursa — start handler yazacaq
+    if ! echo "${CUR_REC_CTX}" | jq -e --arg k "${s}" 'has($k)' >/dev/null 2>&1; then
+      continue
+    fi
+    room="$(resolve_recording_room "${s}" | head -1 | tr -d '[:space:]')"
+    [[ "${room}" =~ ^[0-9a-fA-F-]{8,}$ ]] || continue
+    meta="$(fetch_portal_room_meta "${room}")"
+    teacher="$(echo "${meta}" | jq -r '.teacher_name // empty')"
+    email="$(echo "${meta}" | jq -r '.teacher_email // empty')"
+    group="$(echo "${meta}" | jq -r '.group_name // empty')"
+    if [[ -z "${teacher}" || -z "${group}" ]] && [[ -f "${LIVE_STATE_FILE}" ]]; then
+      live_one="$(jq -c --arg r "${room}" '.meetings[$r] // empty' "${LIVE_STATE_FILE}" 2>/dev/null || true)"
+      if [[ -n "${live_one}" && "${live_one}" != "null" ]]; then
+        [[ -n "${teacher}" ]] || teacher="$(echo "${live_one}" | jq -r '.teacher_name // empty')"
+        [[ -n "${email}" ]] || email="$(echo "${live_one}" | jq -r '.teacher_email // empty')"
+        [[ -n "${group}" ]] || group="$(echo "${live_one}" | jq -r '.group_name // empty')"
+      fi
+    fi
+    CUR_REC_CTX="$(echo "${CUR_REC_CTX}" | jq -c --arg k "${s}" --arg r "${room}" \
+      --arg t "${teacher}" --arg e "${email}" --arg g "${group}" \
+      '.[$k]={room:$r,teacher_name:$t,teacher_email:$e,group_name:$g}' 2>/dev/null || echo "${CUR_REC_CTX}")"
+  done
+fi
+
 CHANGED=0
 [[ "${CUR_KEYS}" != "${PREV_KEYS}" ]] && CHANGED=1
 [[ "${CUR_BUSY}" != "${PREV_BUSY_S}" ]] && CHANGED=1
@@ -515,7 +627,11 @@ time=$(date -Iseconds)"
       found=0
       for p in "${prev_a[@]}"; do [[ "${p}" == "${s}" ]] && found=1 && break; done
       if (( !found )); then
-        room="$(resolve_room_for_slot "${s}" | head -1 | tr -d '[:space:]')"
+        # State itkisində eyni slot üçün təkrar "basladildi" göndərmə
+        if echo "${CUR_REC_CTX}" | jq -e --arg k "${s}" 'has($k)' >/dev/null 2>&1; then
+          continue
+        fi
+        room="$(resolve_recording_room "${s}" | head -1 | tr -d '[:space:]')"
         meta='{}'
         if [[ -n "${room}" ]]; then
           meta="$(fetch_portal_room_meta "${room}")"
@@ -523,6 +639,15 @@ time=$(date -Iseconds)"
         teacher="$(echo "${meta}" | jq -r '.teacher_name // empty')"
         email="$(echo "${meta}" | jq -r '.teacher_email // empty')"
         group="$(echo "${meta}" | jq -r '.group_name // empty')"
+        # live-notify state-dən teacher/group (portal hələ cavab verməyəndə)
+        if [[ -z "${teacher}" || -z "${group}" ]] && [[ -n "${room}" && -f "${LIVE_STATE_FILE}" ]]; then
+          live_one="$(jq -c --arg r "${room}" '.meetings[$r] // empty' "${LIVE_STATE_FILE}" 2>/dev/null || true)"
+          if [[ -n "${live_one}" && "${live_one}" != "null" ]]; then
+            [[ -n "${teacher}" ]] || teacher="$(echo "${live_one}" | jq -r '.teacher_name // empty')"
+            [[ -n "${email}" ]] || email="$(echo "${live_one}" | jq -r '.teacher_email // empty')"
+            [[ -n "${group}" ]] || group="$(echo "${live_one}" | jq -r '.group_name // empty')"
+          fi
+        fi
         [[ -n "${room}" ]] || room="?"
         CUR_REC_CTX="$(echo "${CUR_REC_CTX}" | jq -c --arg k "${s}" --arg r "${room}" \
           --arg t "${teacher}" --arg e "${email}" --arg g "${group}" \
@@ -596,13 +721,19 @@ time=$(date -Iseconds)"
 fi
 
 if command -v jq >/dev/null 2>&1; then
-  jq -nc \
+  # Atomic write: jq fail olanda köhnə state silinməsin (əks halda hər */5 Record basladildi spam)
+  STATE_TMP="${STATE_FILE}.tmp.$$"
+  if jq -nc \
     --arg issues "${CUR_KEYS}" \
     --arg busy "${CUR_BUSY}" \
     --argjson ts "${PREV_CRIT_TS:-0}" \
-    --argjson ctx "${CUR_REC_CTX:-{}}" \
-    '{PREV_ISSUES:$issues,PREV_BUSY:$busy,PREV_CRIT_TS:$ts,PREV_REC_CTX:$ctx}' \
-    >"${STATE_FILE}" 2>/dev/null || true
+    --arg ctx "${CUR_REC_CTX:-{}}" \
+    '{PREV_ISSUES:$issues,PREV_BUSY:$busy,PREV_CRIT_TS:$ts,PREV_REC_CTX:($ctx|fromjson? // {})}' \
+    >"${STATE_TMP}" 2>/dev/null; then
+    mv -f "${STATE_TMP}" "${STATE_FILE}" 2>/dev/null || rm -f "${STATE_TMP}"
+  else
+    rm -f "${STATE_TMP}"
+  fi
   chmod 600 "${STATE_FILE}" 2>/dev/null || true
 fi
 

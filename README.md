@@ -209,7 +209,7 @@ Live meeting log: `/var/log/jitsi/live-notify.log`. Bot log: `journalctl -u jits
 **Vacib:** Telegram lifecycle mesajları yalnız action olanda gedir (hər dəqiqə spam yoxdur):
 
 - `Meeting başladıldı` / `Meeting bitdi` — `live-notify` (Prosody room diff, bir dəfə)
-- `Record basladildi` / `Record bitdi` — `health-notify` (Jibri busy↔idle)
+- `Record basladildi` / `Record bitdi` — `health-notify` (Jibri busy↔idle; room meta: metadata/mp4 və ya tək live otaq; state atomic — `*/5` spam olmur)
 - `Record bunny e yuklendi` / `Record jitsi serverden silindi` — `bunny-upload.sh` (upload OK + lokal silmə)
 
 Format: Vaxt, Müəllim (email), Qrup (+ otaq meeting/record lifecycle-də).

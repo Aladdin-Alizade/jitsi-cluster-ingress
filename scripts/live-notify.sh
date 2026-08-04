@@ -254,6 +254,8 @@ for room in "${CLOSED[@]}"; do
   tg "$(fmt_action_msg "Meeting bitdi:" "${teacher}" "${email}" "${group}" "${room}" "")"
 done
 
-jq -nc --argjson m "${NEXT_MAP}" '{meetings:$m}' >"${STATE_FILE}" 2>/dev/null || true
+jq -nc --argjson m "${NEXT_MAP}" '{meetings:$m}' >"${STATE_FILE}.tmp.$$" 2>/dev/null \
+  && mv -f "${STATE_FILE}.tmp.$$" "${STATE_FILE}" \
+  || rm -f "${STATE_FILE}.tmp.$$"
 chmod 600 "${STATE_FILE}" 2>/dev/null || true
 exit 0

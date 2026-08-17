@@ -1,4 +1,57 @@
-# jitsi-cluster
+# Jitsi cluster for Ingress Academy
+
+A production Jitsi Meet cluster with classroom recording — so Ingress Academy can run live groups, keep the session, and publish it for students.
+
+## Overview
+
+This repository deploys the video stack behind Ingress Academy live classes (`meet.ingress.academy`). It is for the academy’s teachers and operations, not a generic “click to Meet” demo.
+
+The problem: a class that only exists as a call disappears when the meeting ends. Recordings, teacher collections and the student portal have to stay aligned.
+
+The cluster runs Meet (signalling, video, TURN), records with several Jibri slots per recorder VM, uploads to Bunny Stream, and notifies the Ingress portal when a lesson is ready.
+
+## Key Features
+
+- **Live classes** — Jitsi Meet with TURN, simulcast and a config aimed at small groups
+- **Parallel recording** — multiple Jibri processes per recorder VM (default: 10 concurrent recordings)
+- **Publish to students** — recordings uploaded to Bunny Stream and completed against the Ingress portal
+- **Cost control** — Cloud Scheduler start/stop windows (Baku timezone)
+- **Operations** — Telegram health, live and recording alerts; optional Cloudflare DNS
+- **One-command deploy** — Terraform + VM setup via `./deploy.sh`
+
+## How It Works
+
+```text
+Teacher / student
+        ↓
+meet.ingress.academy
+        ↓
+meet-control  +  meet-jvb
+        ↓
+Jibri recorders
+        ↓
+Bunny Stream  →  Ingress portal (published lesson)
+```
+
+## My Role
+
+I designed and operate this cluster: GCP layout, multi-Jibri recording, Bunny upload, portal callbacks, scheduling and the Telegram operations bot.
+
+## Technical Details
+
+| Area | Choice |
+|------|--------|
+| Compute | GCP (Terraform): control, JVB, recorder VMs |
+| Meet | Jitsi (Nginx, Prosody, Jicofo, JVB, Coturn, Jibri) |
+| Recording | Multi-slot Jibri → finalize → Bunny Stream API |
+| Portal | Ingress upload-meta and recording-complete callbacks |
+| Ops | Shell scripts, Cloud Scheduler, Telegram bot |
+
+Default shape: `meet-control` (e2-standard-4), `meet-jvb` (e2-standard-8), two recorders (e2-standard-8) with five Jibri processes each.
+
+---
+
+# Operations
 
 GCP-də Jitsi Meet cluster + multi-Jibri recording + Bunny Stream upload.
 
@@ -30,7 +83,7 @@ recorder-1..2  e2-standard-8     hər VM-də 5 Jibri → Bunny
 ## Start
 
 ```bash
-git clone https://github.com/Aladdin-Biyabangard/jitsi-cluster-ingress.git 
+git clone https://github.com/Aladdin-Alizade/jitsi-cluster-ingress.git 
 cd jitsi-cluster-ingress
 cp .env.example .env
 nano .env          # doldurun
